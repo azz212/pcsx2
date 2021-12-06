@@ -797,11 +797,17 @@ void GSRendererDX11::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sou
 	// DATE: selection of the algorithm.
 	if (DATE)
 	{
-		if (m_texture_shuffle)
+		const bool fbmask = (m_context->FRAME.FBMSK & 0x80000000);
+		if (fbmask || m_texture_shuffle)
 		{
 			// DATE case not supported yet so keep using the old method.
 			// Leave the check in to make sure other DATE cases are triggered correctly.
-			// fprintf(stderr, "%d: DATE: With texture shuffle\n", s_n);
+			// fprintf(stderr, "%d: DATE: Accurate NOT SUPPORTED\n", s_n);
+		}
+		else if (m_context->FBA.FBA)
+		{
+			DATE_one = !m_context->TEST.DATM;
+			//fprintf(stderr, "%d: DATE: Fast with FBA, all pixels will be >= 128\n", s_n);
 		}
 		else if (m_om_bsel.wa && !m_context->TEST.ATE)
 		{
@@ -823,11 +829,11 @@ void GSRendererDX11::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sou
 			{
 				// DATE case not supported yet so keep using the old method.
 				// Leave the check in to make sure other DATE cases are triggered correctly.
-				// fprintf(stderr, "%d: DATE: Slow with alpha %d-%d not supported\n", s_n, m_vt.m_alpha.min, m_vt.m_alpha.max);
+				// fprintf(stderr, "%d: DATE: Accurate with alpha %d-%d NOT SUPPORTED\n", s_n, m_vt.m_alpha.min, m_vt.m_alpha.max);
 			}
 			else if (m_accurate_date)
 			{
-				// fprintf(stderr, "%d: DATE: Fast AD with alpha %d-%d\n", s_n, m_vt.m_alpha.min, m_vt.m_alpha.max);
+				// fprintf(stderr, "%d: DATE: Fast with alpha %d-%d\n", s_n, m_vt.m_alpha.min, m_vt.m_alpha.max);
 				DATE_one = true;
 			}
 		}
