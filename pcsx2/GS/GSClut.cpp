@@ -118,6 +118,8 @@ void GSClut::Invalidate(u32 block)
 
 bool GSClut::WriteTest(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT)
 {
+	bool write_required = false;
+
 	switch (TEX0.CLD)
 	{
 		case 0:
@@ -147,15 +149,19 @@ bool GSClut::WriteTest(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT)
 		default:
 			__assume(0);
 	}
-
-	return m_write.IsDirty(TEX0, TEXCLUT);
+	// We lose one dirty condition if we flush (due to dirty CLUT) which triggers another dirty write
+	// So if we set the dirty write bit during the CLUT write itself, we lose one dirty condition and we miss a CLUT update.
+	// Use Virtual On for testing this.
+	write_required = m_write.IsDirty(TEX0, TEXCLUT);
+	m_write.dirty = false;
+	
+	return write_required;
 }
 
 void GSClut::Write(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT)
 {
 	m_write.TEX0 = TEX0;
 	m_write.TEXCLUT = TEXCLUT;
-	m_write.dirty = false;
 	m_read.dirty = true;
 
 	(this->*m_wc[TEX0.CSM][TEX0.CPSM][TEX0.PSM])(TEX0, TEXCLUT);
