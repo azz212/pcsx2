@@ -1,30 +1,14 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
 #include "common/Threading.h"
+#include "common/Assertions.h"
+#include "common/Pcsx2Defs.h"
 
-#ifdef __M_X86_64
 static const uint iREGCNT_XMM = 16;
 static const uint iREGCNT_GPR = 16;
-#else
-// Register counts for x86/32 mode:
-static const uint iREGCNT_XMM = 8;
-static const uint iREGCNT_GPR = 8;
-#endif
 
 enum XMMSSEType
 {
@@ -33,41 +17,17 @@ enum XMMSSEType
 	//XMMT_FPD = 3, // double
 };
 
-// --------------------------------------------------------------------------------------
-//  __tls_emit / x86EMIT_MULTITHREADED
-// --------------------------------------------------------------------------------------
-// Multithreaded support for the x86 emitter.  (defaults to 0)
-// To enable the multithreaded emitter, either set the below define to 1, or set the define
-// as a project option.  The multithreaded emitter relies on native compiler support for
-// TLS -- Macs are crap out of luck there (for now).
-
-#ifndef x86EMIT_MULTITHREADED
-#if PCSX2_THREAD_LOCAL
-#define x86EMIT_MULTITHREADED 1
-#else
-// No TLS support?  Force-clear the MT flag:
-#pragma message("x86emitter: TLS not available, multithreaded emitter disabled.")
-#undef x86EMIT_MULTITHREADED
-#define x86EMIT_MULTITHREADED 0
-#endif
-#endif
-
-#ifndef __tls_emit
-#if x86EMIT_MULTITHREADED
-#define __tls_emit thread_local
-#else
-// Using TlsVariable is sub-optimal and could result in huge executables, so we
-// force-disable TLS entirely, and disallow running multithreaded recompilation
-// components within PCSX2 manually.
-#define __tls_emit
-#endif
-#endif
-
-extern __tls_emit u8* x86Ptr;
-extern __tls_emit XMMSSEType g_xmmtypes[iREGCNT_XMM];
+extern thread_local u8* x86Ptr;
+extern thread_local XMMSSEType g_xmmtypes[iREGCNT_XMM];
 
 namespace x86Emitter
 {
+	// Win32 requires 32 bytes of shadow stack in the caller's frame.
+#ifdef _WIN32
+	static constexpr int SHADOW_STACK_SIZE = 32;
+#else
+	static constexpr int SHADOW_STACK_SIZE = 0;
+#endif
 
 	extern void xWrite8(u8 val);
 	extern void xWrite16(u16 val);
@@ -81,7 +41,7 @@ namespace x86Emitter
 	template <typename T>
 	static __fi bool is_s8(T imm)
 	{
-		return (s8)imm == (s32)imm;
+		return (s8)imm == (typename std::make_signed<T>::type)imm;
 	}
 
 	template <typename T>
@@ -216,7 +176,7 @@ namespace x86Emitter
 	public:
 		uint GetOperandSize() const
 		{
-			pxAssertDev(_operandSize != 0, "Attempted to use operand size of uninitialized or void object");
+			pxAssertMsg(_operandSize != 0, "Attempted to use operand size of uninitialized or void object");
 			return _operandSize;
 		}
 
@@ -302,7 +262,8 @@ namespace x86Emitter
 
 		bool IsEmpty() const { return Id < 0; }
 		bool IsInvalid() const { return Id == xRegId_Invalid; }
-		bool IsExtended() const { return Id > 7; } // Register 8-15 need an extra bit to be selected
+		bool IsExtended() const { return (Id >= 0 && (Id & 0x0F) > 7); } // Register 8-15 need an extra bit to be selected
+		bool IsExtended8Bit() const { return (Is8BitOp() && Id >= 0x10); }
 		bool IsMem() const { return false; }
 		bool IsReg() const { return true; }
 
@@ -313,17 +274,10 @@ namespace x86Emitter
 		bool IsSIMD() const { return GetOperandSize() == 16; }
 
 // IsWide: return true if the register is 64 bits (requires a wide op on the rex prefix)
-#ifdef __M_X86_64
 		bool IsWide() const
 		{
 			return GetOperandSize() == 8;
 		}
-#else
-		bool IsWide() const
-		{
-			return false;
-		} // no 64 bits GPR
-#endif
 		// return true if the register is a valid YMM register
 		bool IsWideSIMD() const { return GetOperandSize() == 32; }
 
@@ -331,6 +285,9 @@ namespace x86Emitter
 		// is a valid non-null string for any Id, valid or invalid.  No assertions are generated.
 		const char* GetName();
 		int GetId() const { return Id; }
+
+		/// Returns true if the specified register is caller-saved (volatile).
+		static inline bool IsCallerSaved(uint id);
 	};
 
 	class xRegisterInt : public xRegisterBase
@@ -388,7 +345,14 @@ namespace x86Emitter
 		explicit xRegister8(const xRegisterInt& other)
 			: _parent(1, other.Id)
 		{
-			pxAssertDev(other.canMapIDTo(1), "spl, bpl, sil, dil not yet supported");
+			if (!other.canMapIDTo(1))
+				Id |= 0x10;
+		}
+		xRegister8(int regId, bool ext8bit)
+			: _parent(1, regId)
+		{
+			if (ext8bit)
+				Id |= 0x10;
 		}
 
 		bool operator==(const xRegister8& src) const { return Id == src.Id; }
@@ -408,7 +372,7 @@ namespace x86Emitter
 		explicit xRegister16(const xRegisterInt& other)
 			: _parent(2, other.Id)
 		{
-			pxAssertDev(other.canMapIDTo(2), "Mapping h registers to higher registers can produce unexpected values");
+			pxAssertMsg(other.canMapIDTo(2), "Mapping h registers to higher registers can produce unexpected values");
 		}
 
 		bool operator==(const xRegister16& src) const { return this->Id == src.Id; }
@@ -428,8 +392,10 @@ namespace x86Emitter
 		explicit xRegister32(const xRegisterInt& other)
 			: _parent(4, other.Id)
 		{
-			pxAssertDev(other.canMapIDTo(4), "Mapping h registers to higher registers can produce unexpected values");
+			pxAssertMsg(other.canMapIDTo(4), "Mapping h registers to higher registers can produce unexpected values");
 		}
+
+		static const inline xRegister32& GetInstance(uint id);
 
 		bool operator==(const xRegister32& src) const { return this->Id == src.Id; }
 		bool operator!=(const xRegister32& src) const { return this->Id != src.Id; }
@@ -448,8 +414,10 @@ namespace x86Emitter
 		explicit xRegister64(const xRegisterInt& other)
 			: _parent(8, other.Id)
 		{
-			pxAssertDev(other.canMapIDTo(8), "Mapping h registers to higher registers can produce unexpected values");
+			pxAssertMsg(other.canMapIDTo(8), "Mapping h registers to higher registers can produce unexpected values");
 		}
+
+		static const inline xRegister64& GetInstance(uint id);
 
 		bool operator==(const xRegister64& src) const { return this->Id == src.Id; }
 		bool operator!=(const xRegister64& src) const { return this->Id != src.Id; }
@@ -461,6 +429,8 @@ namespace x86Emitter
 	// This register type is provided to allow legal syntax for instructions that accept
 	// an XMM register as a parameter, but do not allow for a GPR.
 
+	struct xRegisterYMMTag {};
+
 	class xRegisterSSE : public xRegisterBase
 	{
 		typedef xRegisterBase _parent;
@@ -471,11 +441,24 @@ namespace x86Emitter
 			: _parent(16, regId)
 		{
 		}
+		xRegisterSSE(int regId, xRegisterYMMTag)
+			: _parent(32, regId)
+		{
+		}
 
 		bool operator==(const xRegisterSSE& src) const { return this->Id == src.Id; }
 		bool operator!=(const xRegisterSSE& src) const { return this->Id != src.Id; }
 
 		static const inline xRegisterSSE& GetInstance(uint id);
+		static const inline xRegisterSSE& GetYMMInstance(uint id);
+
+		/// Returns the register to use when calling a C function.
+		/// arg_number is the argument position from the left, starting with 0.
+		/// sse_number is the argument position relative to the number of vector registers.
+		static const inline xRegisterSSE& GetArgRegister(uint arg_number, uint sse_number, bool ymm = false);
+
+		/// Returns true if the specified register is caller-saved (volatile).
+		static inline bool IsCallerSaved(uint id);
 	};
 
 	class xRegisterCL : public xRegister8
@@ -498,11 +481,7 @@ namespace x86Emitter
 	// more sense and allows the programmer a little more type protection if needed.
 	//
 
-#ifdef __M_X86_64
 #define xRegisterLong xRegister64
-#else
-#define xRegisterLong xRegister32
-#endif
 	static const int wordsize = sizeof(sptr);
 
 	class xAddressReg : public xRegisterLong
@@ -521,6 +500,11 @@ namespace x86Emitter
 		// Returns true if the register is the stack pointer: ESP.
 		bool IsStackPointer() const { return Id == 4; }
 
+		/// Returns the register to use when calling a C function.
+		/// arg_number is the argument position from the left, starting with 0.
+		/// sse_number is the argument position relative to the number of vector registers.
+		static const inline xAddressReg& GetArgRegister(uint arg_number, uint gpr_number);
+
 		xAddressVoid operator+(const xAddressReg& right) const;
 		xAddressVoid operator+(sptr right) const;
 		xAddressVoid operator+(const void* right) const;
@@ -528,7 +512,6 @@ namespace x86Emitter
 		xAddressVoid operator-(const void* right) const;
 		xAddressVoid operator*(int factor) const;
 		xAddressVoid operator<<(u32 shift) const;
-		xAddressReg& operator=(const xAddressReg&) = default;
 	};
 
 	// --------------------------------------------------------------------------------------
@@ -615,12 +598,18 @@ namespace x86Emitter
 	extern const xRegisterEmpty xEmptyReg;
 
 	// clang-format off
-
-extern const xRegisterSSE
+	extern const xRegisterSSE
     xmm0, xmm1, xmm2, xmm3,
     xmm4, xmm5, xmm6, xmm7,
     xmm8, xmm9, xmm10, xmm11,
     xmm12, xmm13, xmm14, xmm15;
+
+	// TODO: This needs to be _M_SSE >= 0x500'ed, but we can't do it atm because common doesn't have variants.
+	extern const xRegisterSSE
+	  ymm0, ymm1, ymm2, ymm3,
+	  ymm4, ymm5, ymm6, ymm7,
+	  ymm8, ymm9, ymm10, ymm11,
+	  ymm12, ymm13, ymm14, ymm15;
 
 extern const xAddressReg
     rax, rbx, rcx, rdx,
@@ -640,7 +629,10 @@ extern const xRegister16
 
 extern const xRegister8
     al, dl, bl,
-    ah, ch, dh, bh;
+    ah, ch, dh, bh,
+    spl, bpl, sil, dil,
+    r8b, r9b, r10b, r11b,
+    r12b, r13b, r14b, r15b;
 
 extern const xAddressReg
     arg1reg, arg2reg,
@@ -659,6 +651,56 @@ extern const xRegister32
 
 	extern const xRegisterCL cl; // I'm special!
 
+	bool xRegisterBase::IsCallerSaved(uint id)
+	{
+#ifdef _WIN32
+		// The x64 ABI considers the registers RAX, RCX, RDX, R8, R9, R10, R11, and XMM0-XMM5 volatile.
+		return (id <= 2 || (id >= 8 && id <= 11));
+#else
+		// rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11 are scratch registers.
+		return (id <= 2 || id == 6 || id == 7 || (id >= 8 && id <= 11));
+#endif
+	}
+
+	const xRegister32& xRegister32::GetInstance(uint id)
+	{
+		static const xRegister32* const m_tbl_x86Regs[] =
+		{
+				&eax, &ecx, &edx, &ebx,
+				&esp, &ebp, &esi, &edi,
+				&r8d, &r9d, &r10d, &r11d,
+				&r12d, &r13d, &r14d, &r15d,
+		};
+
+		pxAssert(id < iREGCNT_GPR);
+		return *m_tbl_x86Regs[id];
+	}
+
+	const xRegister64& xRegister64::GetInstance(uint id)
+	{
+		static const xRegister64* const m_tbl_x86Regs[] =
+		{
+				&rax, &rcx, &rdx, &rbx,
+				&rsp, &rbp, &rsi, &rdi,
+				&r8, &r9, &r10, &r11,
+				&r12, &r13, &r14, &r15
+		};
+
+		pxAssert(id < iREGCNT_GPR);
+		return *m_tbl_x86Regs[id];
+	}
+
+	bool xRegisterSSE::IsCallerSaved(uint id)
+	{
+#ifdef _WIN32
+		// XMM6 through XMM15 are saved. Upper 128 bits is always volatile.
+		return (id < 6);
+#else
+		// All vector registers are volatile.
+		return true;
+#endif
+	}
+
 	const xRegisterSSE& xRegisterSSE::GetInstance(uint id)
 	{
 		static const xRegisterSSE* const m_tbl_xmmRegs[] =
@@ -670,6 +712,45 @@ extern const xRegister32
 
 		pxAssert(id < iREGCNT_XMM);
 		return *m_tbl_xmmRegs[id];
+	}
+
+	const xRegisterSSE& xRegisterSSE::GetYMMInstance(uint id)
+	{
+		static const xRegisterSSE* const m_tbl_ymmRegs[] =
+			{
+				&ymm0, &ymm1, &ymm2, &ymm3,
+				&ymm4, &ymm5, &ymm6, &ymm7,
+				&ymm8, &ymm9, &ymm10, &ymm11,
+				&ymm12, &ymm13, &ymm14, &ymm15};
+
+		pxAssert(id < iREGCNT_XMM);
+		return *m_tbl_ymmRegs[id];
+	}
+
+	const xRegisterSSE& xRegisterSSE::GetArgRegister(uint arg_number, uint sse_number, bool ymm)
+	{
+#ifdef _WIN32
+		// Windows passes arguments according to their position from the left.
+		return ymm ? GetYMMInstance(arg_number) : GetInstance(arg_number);
+#else
+		// Linux counts the number of vector parameters.
+		return ymm ? GetYMMInstance(sse_number) : GetInstance(sse_number);
+#endif
+	}
+
+	const xAddressReg& xAddressReg::GetArgRegister(uint arg_number, uint gpr_number)
+	{
+#ifdef _WIN32
+		// Windows passes arguments according to their position from the left.
+		static constexpr const xAddressReg* regs[] = {&rcx, &rdx, &r8, &r9};
+		pxAssert(arg_number < std::size(regs));
+		return *regs[arg_number];
+#else
+		// Linux counts the number of GPR parameters.
+		static constexpr const xAddressReg* regs[] = {&rdi, &rsi, &rdx, &rcx};
+		pxAssert(gpr_number < std::size(regs));
+		return *regs[gpr_number];
+#endif
 	}
 
 	// --------------------------------------------------------------------------------------
@@ -790,7 +871,7 @@ extern const xRegister32
 		bool IsMem() const { return true; }
 		bool IsReg() const { return false; }
 		bool IsExtended() const { return false; } // Non sense but ease template
-		bool IsWide() const { return GetOperandSize() == 8; }
+		bool IsWide() const { return _operandSize == 8; }
 
 		operator xAddressVoid()
 		{
@@ -854,11 +935,7 @@ extern const xRegister32
 	typedef xIndirect<u32> xIndirect32;
 	typedef xIndirect<u16> xIndirect16;
 	typedef xIndirect<u8> xIndirect8;
-#ifdef __M_X86_64
 	typedef xIndirect<u64> xIndirectNative;
-#else
-	typedef xIndirect<u32> xIndirectNative;
-#endif
 
 	// --------------------------------------------------------------------------------------
 	//  xIndirect64orLess  -  base class 64, 32, 16, and 8 bit operand types
@@ -998,3 +1075,4 @@ extern const xRegister32
 #include "implement/jmpcall.h"
 
 #include "implement/bmi.h"
+#include "implement/avx.h"

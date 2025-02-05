@@ -1,23 +1,9 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-
-#include "PrecompiledHeader.h"
 #include "Common.h"
 #include "Hardware.h"
-#include "IopCommon.h"
+#include "IopHw.h"
 #include "ps2/HwInternal.h"
 #include "ps2/eeHwTraceLog.inl"
 
@@ -29,14 +15,14 @@ static __fi void IntCHackCheck()
 {
 	// Sanity check: To protect from accidentally "rewinding" the cyclecount
 	// on the few times nextBranchCycle can be behind our current cycle.
-	s32 diff = g_nextEventCycle - cpuRegs.cycle;
-	if( diff > 0 ) cpuRegs.cycle = g_nextEventCycle;
+	s32 diff = cpuRegs.nextEventCycle - cpuRegs.cycle;
+	if (diff > 0 && (cpuRegs.cycle - cpuRegs.lastEventCycle) > 8) cpuRegs.cycle = cpuRegs.nextEventCycle;
 }
 
 template< uint page > RETURNS_R128 _hwRead128(u32 mem);
 
 template< uint page, bool intcstathack >
-mem32_t __fastcall _hwRead32(u32 mem)
+mem32_t _hwRead32(u32 mem)
 {
 	pxAssume( (mem & 0x03) == 0 );
 
@@ -44,7 +30,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 	{
 		case 0x00:	return rcntRead32<0x00>( mem );
 		case 0x01:	return rcntRead32<0x01>( mem );
-		
+
 		case 0x02:	return ipuRead32( mem );
 
 		case 0x03:
@@ -56,7 +42,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 					return vifRead32<0>(mem);
 			}
 			return dmacRead32<0x03>( mem );
-		
+
 		case 0x04:
 		case 0x05:
 		case 0x06:
@@ -66,10 +52,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 			// No game is known to attempt such a thing (yay!), so probably nothing for us to
 			// worry about.  Chances are, though, doing so is "legal" and yields some sort
 			// of reproducible behavior.  Candidate for real hardware testing.
-			
 			// Current assumption: Reads 128 bits and discards the unused portion.
-
-			DevCon.WriteLn( Color_Cyan, "Reading 32-bit FIFO data" );
 
 			r128 out128 = _hwRead128<page>(mem & ~0x0f);
 			return reinterpret_cast<u32*>(&out128)[(mem >> 2) & 0x3];
@@ -107,7 +90,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 				case 0x00:
 					ret = psxHu32(0x1f801814);
 					break;
-				case 0x80:					
+				case 0x80:
 #if PSX_EXTRALOGS
 					DevCon.Warning("FIFO Size %x", sif2fifosize);
 #endif
@@ -133,7 +116,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 #endif
 				return ret;
 
-				
+
 			}
 			/*if ((mem & 0x1000ff00) == 0x1000f200)
 			{
@@ -192,7 +175,7 @@ mem32_t __fastcall _hwRead32(u32 mem)
 	//Hack for Transformers and Test Drive Unlimited to simulate filling the VIF FIFO
 	//It actually stalls VIF a few QW before the end of the transfer, so we need to pretend its all gone
 	//else itll take aaaaaaaaages to boot.
-	if(mem == (D1_CHCR + 0x10) && CHECK_VIFFIFOHACK) 
+	if(mem == (D1_CHCR + 0x10) && CHECK_VIFFIFOHACK)
 		return psHu32(mem) + (vif1ch.qwc * 16);
 
 	/*if((mem == GIF_CHCR) && !vif1ch.chcr.STR && gifRegs.stat.M3P && gifRegs.stat.APATH != 3)
@@ -207,14 +190,14 @@ mem32_t __fastcall _hwRead32(u32 mem)
 }
 
 template< uint page >
-mem32_t __fastcall hwRead32(u32 mem)
+mem32_t hwRead32(u32 mem)
 {
 	mem32_t retval = _hwRead32<page,false>(mem);
 	eeHwTraceLog( mem, retval, true );
 	return retval;
 }
 
-mem32_t __fastcall hwRead32_page_0F_INTC_HACK(u32 mem)
+mem32_t hwRead32_page_0F_INTC_HACK(u32 mem)
 {
 	mem32_t retval = _hwRead32<0x0f,true>(mem);
 	eeHwTraceLog( mem, retval, true );
@@ -226,14 +209,14 @@ mem32_t __fastcall hwRead32_page_0F_INTC_HACK(u32 mem)
 // --------------------------------------------------------------------------------------
 
 template< uint page >
-mem8_t __fastcall _hwRead8(u32 mem)
+mem8_t _hwRead8(u32 mem)
 {
 	u32 ret32 = _hwRead32<page, false>(mem & ~0x03);
 	return ((u8*)&ret32)[mem & 0x03];
 }
 
 template< uint page >
-mem8_t __fastcall hwRead8(u32 mem)
+mem8_t hwRead8(u32 mem)
 {
 	mem8_t ret8 = _hwRead8<page>(mem);
 	eeHwTraceLog( mem, ret8, true );
@@ -241,7 +224,7 @@ mem8_t __fastcall hwRead8(u32 mem)
 }
 
 template< uint page >
-mem16_t __fastcall _hwRead16(u32 mem)
+mem16_t _hwRead16(u32 mem)
 {
 	pxAssume( (mem & 0x01) == 0 );
 
@@ -250,14 +233,14 @@ mem16_t __fastcall _hwRead16(u32 mem)
 }
 
 template< uint page >
-mem16_t __fastcall hwRead16(u32 mem)
+mem16_t hwRead16(u32 mem)
 {
 	u16 ret16 = _hwRead16<page>(mem);
 	eeHwTraceLog( mem, ret16, true );
 	return ret16;
 }
 
-mem16_t __fastcall hwRead16_page_0F_INTC_HACK(u32 mem)
+mem16_t hwRead16_page_0F_INTC_HACK(u32 mem)
 {
 	pxAssume( (mem & 0x01) == 0 );
 
@@ -269,7 +252,7 @@ mem16_t __fastcall hwRead16_page_0F_INTC_HACK(u32 mem)
 }
 
 template< uint page >
-static RETURNS_R64 _hwRead64(u32 mem)
+static u64 _hwRead64(u32 mem)
 {
 	pxAssume( (mem & 0x07) == 0 );
 
@@ -287,14 +270,12 @@ static RETURNS_R64 _hwRead64(u32 mem)
 			// No game is known to attempt such a thing (yay!), so probably nothing for us to
 			// worry about.  Chances are, though, doing so is "legal" and yields some sort
 			// of reproducible behavior.  Candidate for real hardware testing.
-			
+
 			// Current assumption: Reads 128 bits and discards the unused portion.
 
 			uint wordpart = (mem >> 3) & 0x1;
-			DevCon.WriteLn( Color_Cyan, "Reading 64-bit FIFO data (%s 64 bits discarded)", wordpart ? "upper" : "lower" );
-
 			r128 full = _hwRead128<page>(mem & ~0x0f);
-			return r64_load(reinterpret_cast<u64*>(&full) + wordpart);
+			return *(reinterpret_cast<u64*>(&full) + wordpart);
 		}
 		case 0x0F:
 			if ((mem & 0xffffff00) == 0x1000f300)
@@ -307,20 +288,20 @@ static RETURNS_R64 _hwRead64(u32 mem)
 					u32 lo = psHu32(0x1000f3E0);
 					ReadFifoSingleWord();
 					u32 hi = psHu32(0x1000f3E0);
-					return r64_from_u32x2(lo, hi);
+					return static_cast<u64>(lo) | (static_cast<u64>(hi) << 32);
 				}
 			}
 		default: break;
 	}
 
-	return r64_from_u32(_hwRead32<page, false>(mem));
+	return static_cast<u64>(_hwRead32<page, false>(mem));
 }
 
 template< uint page >
-RETURNS_R64 hwRead64(u32 mem)
+mem64_t hwRead64(u32 mem)
 {
-	r64 res = _hwRead64<page>(mem);
-	eeHwTraceLog(mem, *(u64*)&res, true);
+	u64 res = _hwRead64<page>(mem);
+	eeHwTraceLog(mem, res, true);
 	return res;
 }
 
@@ -369,7 +350,7 @@ RETURNS_R128 _hwRead128(u32 mem)
 				DevCon.Warning("128bit read from %x wibble", mem);
 				if (mem == 0x1000f3E0)
 				{
-					
+
 					ReadFifoSingleWord();
 					u32 part0 = psHu32(0x1000f3E0);
 					ReadFifoSingleWord();
@@ -384,7 +365,7 @@ RETURNS_R128 _hwRead128(u32 mem)
 			break;
 
 		default:
-			return r128_from_r64_clean(_hwRead64<page>(mem));
+			return r128_from_u64_dup(_hwRead64<page>(mem));
 	}
 	return r128_load(&result);
 }
@@ -393,17 +374,17 @@ template< uint page >
 RETURNS_R128 hwRead128(u32 mem)
 {
 	r128 res = _hwRead128<page>(mem);
-	eeHwTraceLog(mem, *(mem128_t*)&res, true);
+	eeHwTraceLog(mem, res, true);
 	return res;
 }
 
 #define InstantizeHwRead(pageidx) \
-	template mem8_t __fastcall hwRead8<pageidx>(u32 mem); \
-	template mem16_t __fastcall hwRead16<pageidx>(u32 mem); \
-	template mem32_t __fastcall hwRead32<pageidx>(u32 mem); \
-	template RETURNS_R64 hwRead64<pageidx>(u32 mem); \
+	template mem8_t hwRead8<pageidx>(u32 mem); \
+	template mem16_t hwRead16<pageidx>(u32 mem); \
+	template mem32_t hwRead32<pageidx>(u32 mem); \
+	template mem64_t hwRead64<pageidx>(u32 mem); \
 	template RETURNS_R128 hwRead128<pageidx>(u32 mem); \
-	template mem32_t __fastcall _hwRead32<pageidx, false>(u32 mem);
+	template mem32_t _hwRead32<pageidx, false>(u32 mem);
 
 InstantizeHwRead(0x00);	InstantizeHwRead(0x08);
 InstantizeHwRead(0x01);	InstantizeHwRead(0x09);

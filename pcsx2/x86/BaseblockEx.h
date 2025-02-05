@@ -1,21 +1,12 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
-#include <map> // used by BaseBlockEx
+#include <cstring>
+#include <map>
+
+#include "common/Assertions.h"
 
 // Every potential jump point in the PS2's addressable memory has a BASEBLOCK
 // associated with it. So that means a BASEBLOCK for every 4 bytes of PS2
@@ -31,10 +22,10 @@ struct BASEBLOCK
 // extra block info (only valid for start of fn)
 struct BASEBLOCKEX
 {
-	u32 startpc;
 	uptr fnptr;
-	u16 size;    // The size in dwords (equivalent to the number of instructions)
-	u16 x86size; // The size in byte of the translated x86 instructions
+	u32 startpc;
+	u32 size;    // The size in dwords (equivalent to the number of instructions)
+	u32 x86size; // The size in byte of the translated x86 instructions
 
 #ifdef PCSX2_DEVBUILD
 	// Could be useful to instrument the block
@@ -164,9 +155,9 @@ public:
 	{
 	}
 
-	void SetJITCompile(void (*recompiler_)())
+	void SetJITCompile(const void *recompiler_)
 	{
-		recompiler = (uptr)recompiler_;
+		recompiler = reinterpret_cast<uptr>(recompiler_);
 	}
 
 	BASEBLOCKEX* New(u32 startpc, uptr fnptr);
@@ -243,8 +234,8 @@ public:
  * Will associate `reclut[pagebase + pageidx]` with `mapbase[mappage << 14]`
  * Will associate `hwlut[pagebase + pageidx]` with `pageidx << 16`
  */
-static void recLUT_SetPage(uptr reclut[0x10000], u32 hwlut[0x10000],
-                           BASEBLOCK* mapbase, uint pagebase, uint pageidx, uint mappage)
+static inline void recLUT_SetPage(uptr reclut[0x10000], u32 hwlut[0x10000],
+                                  BASEBLOCK* mapbase, uint pagebase, uint pageidx, uint mappage)
 {
 	// this value is in 64k pages!
 	uint page = pagebase + pageidx;
@@ -255,8 +246,4 @@ static void recLUT_SetPage(uptr reclut[0x10000], u32 hwlut[0x10000],
 		hwlut[page] = 0u - (pagebase << 16);
 }
 
-#if defined(_M_X86_64)
 static_assert(sizeof(BASEBLOCK) == 8, "BASEBLOCK is not 8 bytes");
-#else
-static_assert(sizeof(BASEBLOCK) == 4, "BASEBLOCK is not 4 bytes");
-#endif

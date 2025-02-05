@@ -1,46 +1,24 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 class alignas(16) GSVector4
 {
-	constexpr static __m128 cxpr_setr_ps(float x, float y, float z, float w)
+	struct cxpr_init_tag {};
+	static constexpr cxpr_init_tag cxpr_init{};
+
+	constexpr GSVector4(cxpr_init_tag, float x, float y, float z, float w)
+		: F32{x, y, z, w}
 	{
-#ifdef __GNUC__
-		return __m128{x, y, z, w};
-#else
-		__m128 m = {};
-		m.m128_f32[0] = x;
-		m.m128_f32[1] = y;
-		m.m128_f32[2] = z;
-		m.m128_f32[3] = w;
-		return m;
-#endif
 	}
 
-	constexpr static __m128 cxpr_setr_epi32(int x, int y, int z, int w)
+	constexpr GSVector4(cxpr_init_tag, int x, int y, int z, int w)
+		: I32{x, y, z, w}
 	{
-#ifdef __GNUC__
-		return (__m128)(__v4si{x, y, z, w});
-#else
-		__m128 m = {};
-		m.m128_i32[0] = x;
-		m.m128_i32[1] = y;
-		m.m128_i32[2] = z;
-		m.m128_i32[3] = w;
-		return m;
-#endif
+	}
+
+	constexpr GSVector4(cxpr_init_tag, u64 x, u64 y)
+		: U64{x, y}
+	{
 	}
 
 public:
@@ -51,6 +29,7 @@ public:
 		struct { float left, top, right, bottom; };
 		float v[4];
 		float F32[4];
+		double F64[2];
 		s8  I8[16];
 		s16 I16[8];
 		s32 I32[4];
@@ -70,31 +49,40 @@ public:
 	static const GSVector4 m_four;
 	static const GSVector4 m_x4b000000;
 	static const GSVector4 m_x4f800000;
+	static const GSVector4 m_xc1e00000000fffff;
 	static const GSVector4 m_max;
 	static const GSVector4 m_min;
 
 	GSVector4() = default;
 
-	constexpr GSVector4(const GSVector4&) = default;
-
 	constexpr static GSVector4 cxpr(float x, float y, float z, float w)
 	{
-		return GSVector4(cxpr_setr_ps(x, y, z, w));
+		return GSVector4(cxpr_init, x, y, z, w);
 	}
 
 	constexpr static GSVector4 cxpr(float x)
 	{
-		return GSVector4(cxpr_setr_ps(x, x, x, x));
+		return GSVector4(cxpr_init, x, x, x, x);
 	}
 
 	constexpr static GSVector4 cxpr(int x, int y, int z, int w)
 	{
-		return GSVector4(cxpr_setr_epi32(x, y, z, w));
+		return GSVector4(cxpr_init, x, y, z, w);
 	}
 
 	constexpr static GSVector4 cxpr(int x)
 	{
-		return GSVector4(cxpr_setr_epi32(x, x, x, x));
+		return GSVector4(cxpr_init, x, x, x, x);
+	}
+
+	constexpr static GSVector4 cxpr64(u64 x, u64 y)
+	{
+		return GSVector4(cxpr_init, x, y);
+	}
+
+	constexpr static GSVector4 cxpr64(u64 x)
+	{
+		return GSVector4(cxpr_init, x, x);
 	}
 
 	__forceinline GSVector4(float x, float y, float z, float w)
@@ -134,6 +122,11 @@ public:
 	{
 	}
 
+	__forceinline explicit GSVector4(__m128d m)
+		: m(_mm_castpd_ps(m))
+	{
+	}
+
 	__forceinline explicit GSVector4(float f)
 	{
 		*this = f;
@@ -158,7 +151,7 @@ public:
 	{
 		GSVector4i v((int)u);
 
-		*this = GSVector4(v) + (m_x4f800000 & GSVector4::cast(v.sra32(31)));
+		*this = GSVector4(v) + (m_x4f800000 & GSVector4::cast(v.sra32<31>()));
 	}
 
 	__forceinline explicit GSVector4(const GSVector4i& v);
@@ -177,9 +170,9 @@ public:
 
 #endif
 
-	__forceinline void operator=(const GSVector4& v)
+	__forceinline static GSVector4 f64(double x, double y)
 	{
-		m = v.m;
+		return GSVector4(_mm_castpd_ps(_mm_set_pd(y, x)));
 	}
 
 	__forceinline void operator=(float f)
@@ -229,6 +222,11 @@ public:
 	__forceinline static GSVector4 rgba32(u32 rgba, int shift)
 	{
 		return GSVector4(GSVector4i::load((int)rgba).u8to32() << shift);
+	}
+
+	__forceinline static GSVector4 unorm8(u32 rgba)
+	{
+		return rgba32(rgba) * GSVector4::cxpr(1.0f / 255.0f);
 	}
 
 	__forceinline GSVector4 abs() const
@@ -517,92 +515,17 @@ public:
 	template <int src, int dst>
 	__forceinline GSVector4 insert32(const GSVector4& v) const
 	{
-		// TODO: use blendps when src == dst
-
-#if 0 // _M_SSE >= 0x401
-
-		// NOTE: it's faster with shuffles...
-
-		return GSVector4(_mm_insert_ps(m, v.m, _MM_MK_INSERTPS_NDX(src, dst, 0)));
-
-#else
-
-		switch (dst)
-		{
-			case 0:
-				switch (src)
-				{
-					case 0: return yyxx(v).zxzw(*this);
-					case 1: return yyyy(v).zxzw(*this);
-					case 2: return yyzz(v).zxzw(*this);
-					case 3: return yyww(v).zxzw(*this);
-					default: __assume(0);
-				}
-				break;
-			case 1:
-				switch (src)
-				{
-					case 0: return xxxx(v).xzzw(*this);
-					case 1: return xxyy(v).xzzw(*this);
-					case 2: return xxzz(v).xzzw(*this);
-					case 3: return xxww(v).xzzw(*this);
-					default: __assume(0);
-				}
-				break;
-			case 2:
-				switch (src)
-				{
-					case 0: return xyzx(wwxx(v));
-					case 1: return xyzx(wwyy(v));
-					case 2: return xyzx(wwzz(v));
-					case 3: return xyzx(wwww(v));
-					default: __assume(0);
-				}
-				break;
-			case 3:
-				switch (src)
-				{
-					case 0: return xyxz(zzxx(v));
-					case 1: return xyxz(zzyy(v));
-					case 2: return xyxz(zzzz(v));
-					case 3: return xyxz(zzww(v));
-					default: __assume(0);
-				}
-				break;
-			default:
-				__assume(0);
-		}
-
-#endif
+		if constexpr (src == dst)
+			return GSVector4(_mm_blend_ps(m, v.m, 1 << src));
+		else
+			return GSVector4(_mm_insert_ps(m, v.m, _MM_MK_INSERTPS_NDX(src, dst, 0)));
 	}
 
-#ifdef __linux__
-#if 0
-	// Debug build error, _mm_extract_ps is actually a macro that use an anonymous union
-	// that contains i. I decide to rename the template on linux but it makes windows unhappy
-	// Hence the nice ifdef
-	//
-	// Code extract:
-	// union { int i; float f; } __tmp;
-
-GSVector.h:2977:40: error: declaration of 'int GSVector4::extract32() const::<anonymous union>::i'
-   return _mm_extract_ps(m, i);
-GSVector.h:2973:15: error:  shadows template parm 'int i'
-  template<int i> __forceinline int extract32() const
-#endif
-
-	template <int index>
-	__forceinline int extract32() const
-	{
-		return _mm_extract_ps(m, index);
-	}
-#else
 	template <int i>
 	__forceinline int extract32() const
 	{
 		return _mm_extract_ps(m, i);
 	}
-#endif
 
 	__forceinline static GSVector4 zero()
 	{
@@ -638,7 +561,7 @@ GSVector.h:2973:15: error:  shadows template parm 'int i'
 	{
 		GSVector4i v = GSVector4i::load((int)u);
 
-		return GSVector4(v) + (m_x4f800000 & GSVector4::cast(v.sra32(31)));
+		return GSVector4(v) + (m_x4f800000 & GSVector4::cast(v.sra32<31>()));
 	}
 
 	template <bool aligned>
@@ -873,6 +796,36 @@ GSVector.h:2973:15: error:  shadows template parm 'int i'
 		return GSVector4(_mm_cmple_ps(v1, v2));
 	}
 
+	__forceinline GSVector4 mul64(const GSVector4& v) const
+	{
+		return GSVector4(_mm_mul_pd(_mm_castps_pd(m), _mm_castps_pd(v.m)));
+	}
+
+	__forceinline GSVector4 add64(const GSVector4& v) const
+	{
+		return GSVector4(_mm_add_pd(_mm_castps_pd(m), _mm_castps_pd(v.m)));
+	}
+
+	__forceinline GSVector4 sub64(const GSVector4& v) const
+	{
+		return GSVector4(_mm_sub_pd(_mm_castps_pd(m), _mm_castps_pd(v.m)));
+	}
+
+	__forceinline static GSVector4 f32to64(const GSVector4& v)
+	{
+		return GSVector4(_mm_cvtps_pd(v.m));
+	}
+
+	__forceinline static GSVector4 f32to64(const void* p)
+	{
+		return GSVector4(_mm_cvtps_pd(_mm_castpd_ps(_mm_load_sd(static_cast<const double*>(p)))));
+	}
+
+	__forceinline GSVector4i f64toi32(bool truncate = true) const
+	{
+		return GSVector4i(truncate ? _mm_cvttpd_epi32(_mm_castps_pd(m)) : _mm_cvtpd_epi32(_mm_castps_pd(m)));
+	}
+
 	// clang-format off
 
 	#define VECTOR4_SHUFFLE_4(xs, xn, ys, yn, zs, zn, ws, wn) \
@@ -922,4 +875,9 @@ GSVector.h:2973:15: error:  shadows template parm 'int i'
 	}
 
 #endif
+
+	__forceinline static GSVector4 broadcast64(const void* d)
+	{
+		return GSVector4(_mm_loaddup_pd(static_cast<const double*>(d)));
+	}
 };

@@ -1,17 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
@@ -70,7 +58,6 @@ namespace x86Emitter
 #endif
 	};
 
-#ifdef __M_X86_64
 	// --------------------------------------------------------------------------------------
 	//  xImpl_MovImm64
 	// --------------------------------------------------------------------------------------
@@ -82,7 +69,6 @@ namespace x86Emitter
 
 		void operator()(const xRegister64& to, s64 imm, bool preserve_flags = false) const;
 	};
-#endif
 
 	// --------------------------------------------------------------------------------------
 	//  xImpl_CMov
@@ -131,10 +117,8 @@ namespace x86Emitter
 		void operator()(const xRegister16or32or64& to, const xIndirect8& sibsrc) const;
 		void operator()(const xRegister32or64& to, const xRegister16& from) const;
 		void operator()(const xRegister32or64& to, const xIndirect16& sibsrc) const;
-#ifdef __M_X86_64
 		void operator()(const xRegister64& to, const xRegister32& from) const;
 		void operator()(const xRegister64& to, const xIndirect32& sibsrc) const;
-#endif
 
 		//void operator()( const xRegister32& to, const xDirectOrIndirect16& src ) const;
 		//void operator()( const xRegister16or32& to, const xDirectOrIndirect8& src ) const;

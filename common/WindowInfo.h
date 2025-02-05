@@ -1,20 +1,10 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 #include "Pcsx2Defs.h"
+
+#include <optional>
 
 /// Contains the information required to create a graphics context in a window.
 struct WindowInfo
@@ -37,6 +27,9 @@ struct WindowInfo
 	/// Abstract handle to the window. This depends on the surface type.
 	void* window_handle = nullptr;
 
+	/// For platforms where a separate surface/layer handle is needed, it is stored here (e.g. MacOS).
+	void* surface_handle = nullptr;
+
 	/// Width of the surface in pixels.
 	u32 surface_width = 0;
 
@@ -50,5 +43,5 @@ struct WindowInfo
 	float surface_refresh_rate = 0.0f;
 
 	/// Returns the host's refresh rate for the given window, if available.
-	static bool QueryRefreshRateForWindow(const WindowInfo& wi, float* refresh_rate);
+	static std::optional<float> QueryRefreshRateForWindow(const WindowInfo& wi);
 };

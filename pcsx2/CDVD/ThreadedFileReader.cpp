@@ -1,20 +1,17 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#include "PrecompiledHeader.h"
 #include "ThreadedFileReader.h"
+#include "Host.h"
+
+#include "common/Error.h"
+#include "common/HostSys.h"
+#include "common/Path.h"
+#include "common/ProgressCallback.h"
+#include "common/SmallString.h"
+#include "common/Threading.h"
+
+#include <cstring>
 
 // Make sure buffer size is bigger than the cutoff where PCSX2 emulates a seek
 // If buffers are smaller than that, we can't keep up with linear reads
@@ -70,22 +67,34 @@ void ThreadedFileReader::Loop()
 		if (m_quit)
 			return;
 
-		u64 requestOffset = m_requestOffset;
-		u32 requestSize = m_requestSize;
-		void* ptr = m_requestPtr.load(std::memory_order_relaxed);
-
-		m_running = true;
-		lock.unlock();
+		u64 requestOffset;
+		u32 requestSize;
 
 		bool ok = true;
+		m_running = true;
 
-		if (ptr)
+		for (;;)
 		{
-			ok = Decompress(ptr, requestOffset, requestSize);
-		}
+			void* ptr = m_requestPtr.load(std::memory_order_acquire);
+			requestOffset = m_requestOffset;
+			requestSize = m_requestSize;
+			lock.unlock();
 
-		m_requestPtr.store(nullptr, std::memory_order_release);
-		m_condition.notify_one();
+			if (ptr)
+				ok = Decompress(ptr, requestOffset, requestSize);
+
+			// There's a potential for a race here when doing synchronous reads. Basically, another request can come in,
+			// after we release the lock, but before we store null to indicate we're finished. So, we do a compare-exchange
+			// instead, to detect when this happens, and if so, reload all the inputs and try again.
+			if (!m_requestPtr.compare_exchange_strong(ptr, nullptr, std::memory_order_release))
+			{
+				lock.lock();
+				continue;
+			}
+
+			m_condition.notify_one();
+			break;
+		}
 
 		if (ok)
 		{
@@ -179,6 +188,9 @@ bool ThreadedFileReader::Decompress(void* target, u64 begin, u32 size)
 	u64 off = begin;
 	while (remaining)
 	{
+		if (m_requestCancelled.load(std::memory_order_relaxed))
+			return false;
+
 		Chunk chunk = ChunkForOffset(off);
 		if (m_internalBlockSize || chunk.offset != off || chunk.length > remaining)
 		{
@@ -239,13 +251,43 @@ bool ThreadedFileReader::TryCachedRead(void*& buffer, u64& offset, u32& size, co
 	return allDone;
 }
 
-bool ThreadedFileReader::Open(std::string fileName)
+bool ThreadedFileReader::Precache(ProgressCallback* progress, Error* error)
 {
 	CancelAndWaitUntilStopped();
-	return Open2(std::move(fileName));
+	progress->SetStatusText(SmallString::from_format(TRANSLATE_FS("CDVD", "Precaching {}..."), Path::GetFileName(m_filename)).c_str());
+	return Precache2(progress, error);
 }
 
-int ThreadedFileReader::ReadSync(void* pBuffer, uint sector, uint count)
+bool ThreadedFileReader::Precache2(ProgressCallback* progress, Error* error)
+{
+	Error::SetStringView(error, TRANSLATE_SV("CDVD","Precaching is not supported for this file format."));
+	return false;
+}
+
+bool ThreadedFileReader::CheckAvailableMemoryForPrecaching(u64 required_size, Error* error)
+{
+	// Don't allow precaching to use more than 50% of system memory.
+	// Hopefully nobody's running 2-4GB potatoes anymore....
+	const u64 memory_size = GetPhysicalMemory();
+	const u64 max_precache_size = memory_size / 2;
+	if (required_size > max_precache_size)
+	{
+		Error::SetStringFmt(error,
+			TRANSLATE_FS("CDVD", "Required memory ({}GB) is the above the maximum allowed ({}GB)."),
+			required_size / _1gb, max_precache_size / _1gb);
+		return false;
+	}
+
+	return true;
+}
+
+bool ThreadedFileReader::Open(std::string filename, Error* error)
+{
+	CancelAndWaitUntilStopped();
+	return Open2(std::move(filename), error);
+}
+
+int ThreadedFileReader::ReadSync(void* pBuffer, u32 sector, u32 count)
 {
 	u32 blocksize = InternalBlockSize();
 	u64 offset = (u64)sector * (u64)blocksize + m_dataoffset;
@@ -290,11 +332,16 @@ void ThreadedFileReader::CancelAndWaitUntilStopped(void)
 {
 	m_requestCancelled.store(true, std::memory_order_relaxed);
 	std::unique_lock<std::mutex> lock(m_mtx);
+
+	// Prevent the last request being picked up, if there was one.
+	// m_requestCancelled just stops the current decompress.
+	m_requestSize = 0;
+
 	while (m_running)
 		m_condition.wait(lock);
 }
 
-void ThreadedFileReader::BeginRead(void* pBuffer, uint sector, uint count)
+void ThreadedFileReader::BeginRead(void* pBuffer, u32 sector, u32 count)
 {
 	s32 blocksize = InternalBlockSize();
 	u64 offset = (u64)sector * (u64)blocksize + m_dataoffset;
@@ -326,7 +373,7 @@ int ThreadedFileReader::FinishRead(void)
 	if (m_requestPtr.load(std::memory_order_acquire) == nullptr)
 		return m_amtRead;
 	std::unique_lock<std::mutex> lock(m_mtx);
-	while (m_requestPtr)
+	while (m_requestPtr.load(std::memory_order_acquire))
 		m_condition.wait(lock);
 	return m_amtRead;
 }
@@ -349,12 +396,12 @@ void ThreadedFileReader::Close(void)
 	Close2();
 }
 
-void ThreadedFileReader::SetBlockSize(uint bytes)
+void ThreadedFileReader::SetBlockSize(u32 bytes)
 {
 	m_blocksize = bytes;
 }
 
-void ThreadedFileReader::SetDataOffset(int bytes)
+void ThreadedFileReader::SetDataOffset(u32 bytes)
 {
 	m_dataoffset = bytes;
 }

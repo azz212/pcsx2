@@ -1,22 +1,9 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#ifndef __R3000A_H__
-#define __R3000A_H__
+#pragma once
 
-#include <stdio.h>
+#include "common/Pcsx2Defs.h"
 
 union GPRRegs {
 	struct {
@@ -109,6 +96,22 @@ struct psxRegisters {
 	u32 code;			/* The instruction */
 	u32 cycle;
 	u32 interrupt;
+	u32 pcWriteback;
+
+	// Controls when branch tests are performed.
+	u32 iopNextEventCycle;
+
+	// This value is used when the IOP execution is broken to return control to the EE.
+	// (which happens when the IOP throws EE-bound interrupts).  It holds the value of
+	// iopCycleEE (which is set to zero to facilitate the code break), so that the unrun
+	// cycles can be accounted for later.
+	s32 iopBreak;
+
+	// Tracks current number of cycles IOP can run in EE cycles. When it dips below zero,
+	// control is returned to the EE.
+	s32 iopCycleEE;
+	u32 iopCycleEECarry;
+
 	u32 sCycle[32];		// start cycle for signaled ints
 	s32 eCycle[32];		// cycle delta for signaled ints (sCycle + eCycle == branch cycle)
 	//u32 _msflag[32];
@@ -116,11 +119,6 @@ struct psxRegisters {
 };
 
 alignas(16) extern psxRegisters psxRegs;
-
-extern u32 g_iopNextEventCycle;
-extern s32 iopBreak;		// used when the IOP execution is broken and control returned to the EE
-extern s32 iopCycleEE;		// tracks IOP's current sych status with the EE
-extern bool iopBreakpoint;
 
 #ifndef _PC_
 
@@ -171,8 +169,8 @@ extern u32 EEoCycle;
 
 #endif
 
-extern s32 psxNextCounter;
-extern u32 psxNextsCounter;
+extern s32 psxNextDeltaCounter;
+extern u32 psxNextStartCounter;
 extern bool iopEventAction;
 extern bool iopEventTestIsActive;
 
@@ -186,13 +184,9 @@ extern bool iopIsDelaySlot;
 struct R3000Acpu {
 	void (*Reserve)();
 	void (*Reset)();
-	void (*Execute)();
 	s32 (*ExecuteBlock)( s32 eeCycles );		// executes the given number of EE cycles.
 	void (*Clear)(u32 Addr, u32 Size);
 	void (*Shutdown)();
-	
-	uint (*GetCacheReserve)();
-	void (*SetCacheReserve)( uint reserveInMegs );
 };
 
 extern R3000Acpu *psxCpu;
@@ -200,9 +194,8 @@ extern R3000Acpu psxInt;
 extern R3000Acpu psxRec;
 
 extern void psxReset();
-extern void __fastcall psxException(u32 code, u32 step);
+extern void psxException(u32 code, u32 step);
 extern void iopEventTest();
-extern void psxMemReset();
 
 int psxIsBreakpointNeeded(u32 addr);
 int psxIsMemcheckNeeded(u32 pc);
@@ -216,6 +209,4 @@ extern void (*psxCP2[64])();
 extern void (*psxCP2BSC[32])();
 
 extern void psxBiosReset();
-extern bool __fastcall psxBiosCall();
-
-#endif /* __R3000A_H__ */
+extern bool psxBiosCall();

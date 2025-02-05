@@ -1,31 +1,9 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
 #include <cstdint>
-
-// --------------------------------------------------------------------------------------
-//  Forward declarations
-// --------------------------------------------------------------------------------------
-// Forward declarations for wxWidgets-supporting features.
-// If you aren't linking against wxWidgets libraries, then functions that
-// depend on these types will not be usable (they will yield linker errors).
-class wxString;
-class FastFormatAscii;
-class FastFormatUnicode;
 
 // --------------------------------------------------------------------------------------
 //  Basic Atomic Types
@@ -99,17 +77,6 @@ union u128
 	{
 		return (lo != right.lo) || (hi != right.hi);
 	}
-
-	// In order for the following ToString() and WriteTo methods to be available, you must
-	// be linking to both wxWidgets and the pxWidgets extension library.  If you are not
-	// using them, then you will need to provide your own implementations of these methods.
-	wxString ToString() const;
-	wxString ToString64() const;
-	wxString ToString8() const;
-
-	void WriteTo(FastFormatAscii& dest) const;
-	void WriteTo8(FastFormatAscii& dest) const;
-	void WriteTo64(FastFormatAscii& dest) const;
 };
 
 struct s128

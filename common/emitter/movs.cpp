@@ -1,17 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 /*
  * ix86 core v0.9.1
@@ -55,18 +43,7 @@ namespace x86Emitter
 		// mov eax has a special from when writing directly to a DISP32 address
 		// (sans any register index/base registers).
 
-#ifndef __M_X86_64
-		// Note: On x86-64 this is an immediate 64-bit address, which is larger than the equivalent rip offset instr
-		if (from.IsAccumulator() && dest.Index.IsEmpty() && dest.Base.IsEmpty())
-		{
-			xOpAccWrite(from.GetPrefix16(), from.Is8BitOp() ? 0xa2 : 0xa3, from, dest);
-			xWrite32(dest.Displacement);
-		}
-		else
-#endif
-		{
-			xOpWrite(from.GetPrefix16(), from.Is8BitOp() ? 0x88 : 0x89, from, dest);
-		}
+		xOpWrite(from.GetPrefix16(), from.Is8BitOp() ? 0x88 : 0x89, from, dest);
 	}
 
 	void xImpl_Mov::operator()(const xRegisterInt& to, const xIndirectVoid& src) const
@@ -74,18 +51,7 @@ namespace x86Emitter
 		// mov eax has a special from when reading directly from a DISP32 address
 		// (sans any register index/base registers).
 
-#ifndef __M_X86_64
-		// Note: On x86-64 this is an immediate 64-bit address, which is larger than the equivalent rip offset instr
-		if (to.IsAccumulator() && src.Index.IsEmpty() && src.Base.IsEmpty())
-		{
-			xOpAccWrite(to.GetPrefix16(), to.Is8BitOp() ? 0xa0 : 0xa1, to, src);
-			xWrite32(src.Displacement);
-		}
-		else
-#endif
-		{
-			xOpWrite(to.GetPrefix16(), to.Is8BitOp() ? 0x8a : 0x8b, to, src);
-		}
+		xOpWrite(to.GetPrefix16(), to.Is8BitOp() ? 0x8a : 0x8b, to, src);
 	}
 
 	void xImpl_Mov::operator()(const xIndirect64orLess& dest, sptr imm) const
@@ -153,7 +119,6 @@ namespace x86Emitter
 
 	const xImpl_Mov xMOV;
 
-#ifdef __M_X86_64
 	void xImpl_MovImm64::operator()(const xRegister64& to, s64 imm, bool preserve_flags) const
 	{
 		if (imm == (u32)imm || imm == (s32)imm)
@@ -169,13 +134,12 @@ namespace x86Emitter
 	}
 
 	const xImpl_MovImm64 xMOV64;
-#endif
 
 	// --------------------------------------------------------------------------------------
 	//  CMOVcc
 	// --------------------------------------------------------------------------------------
 
-#define ccSane() pxAssertDev(ccType >= 0 && ccType <= 0x0f, "Invalid comparison type specifier.")
+#define ccSane() pxAssertMsg(ccType >= 0 && ccType <= 0x0f, "Invalid comparison type specifier.")
 
 // Macro useful for trapping unwanted use of EBP.
 //#define EbpAssert() pxAssert( to != ebp )
@@ -241,7 +205,6 @@ namespace x86Emitter
 		xOpWrite0F(SignExtend ? 0xbf : 0xb7, to, sibsrc);
 	}
 
-#ifdef __M_X86_64
 	void xImpl_MovExtend::operator()(const xRegister64& to, const xRegister32& from) const
 	{
 		EbpAssert();
@@ -255,7 +218,6 @@ namespace x86Emitter
 		pxAssertMsg(SignExtend, "Use mov for 64-bit movzx");
 		xOpWrite(0, 0x63, to, sibsrc);
 	}
-#endif
 
 	const xImpl_MovExtend xMOVSX = {true};
 	const xImpl_MovExtend xMOVZX = {false};

@@ -1,29 +1,10 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2020  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#ifndef __DEV9_H__
-#define __DEV9_H__
+#pragma once
 
 #include <stdio.h>
 #include <string>
-#ifndef EXTERN
-#define EXTERN extern
-#endif
-#define DEV9defs
-//#define WINVER 0x0600
-//#define _WIN32_WINNT 0x0500
 
 #include "net.h"
 #include "PacketReader/IP/IP_Address.h"
@@ -32,7 +13,7 @@
 #ifdef _WIN32
 
 #define usleep(x) Sleep(x / 1000)
-#include <windows.h>
+#include "common/RedtapeWindows.h"
 #include <windowsx.h>
 #include <winioctl.h>
 
@@ -54,44 +35,6 @@ bool rx_fifo_can_rx();
 
 #define HDD_MIN_GB 40
 #define HDD_MAX_GB 120
-
-struct ConfigHost
-{
-	std::string Url;
-	std::string Desc;
-	u8 Address[4];
-	bool Enabled;
-};
-
-struct ConfigDEV9
-{
-	char Eth[256];
-	NetApi EthApi;
-	bool InterceptDHCP;
-	PacketReader::IP::IP_Address PS2IP;
-	PacketReader::IP::IP_Address Mask;
-	PacketReader::IP::IP_Address Gateway;
-	PacketReader::IP::IP_Address DNS1;
-	PacketReader::IP::IP_Address DNS2;
-	int AutoMask;
-	int AutoGateway;
-	int AutoDNS1;
-	int AutoDNS2;
-	int EthLogDNS;
-	std::vector<ConfigHost> EthHosts;
-#ifdef _WIN32
-	wchar_t Hdd[256];
-#else
-	char Hdd[256];
-#endif
-	int HddSize;
-
-	int hddEnable;
-	int ethEnable;
-};
-
-
-EXTERN ConfigDEV9 config;
 
 typedef struct
 {
@@ -126,9 +69,15 @@ typedef struct
 	u16 mdma_mode;
 	u16 udma_mode;
 
-	//Non-Regs
+	// FIFO
 	int fifo_bytes_read;
 	int fifo_bytes_write;
+	u8 fifo[16 * 512];
+
+	// DMA
+	u8* dma_iop_ptr;
+	int dma_iop_transfered;
+	int dma_iop_size;
 } dev9Struct;
 
 //EEPROM states
@@ -143,7 +92,7 @@ typedef struct
 #define EEPROM_ADDR5 8
 #define EEPROM_TDATA 9 //ready to send/receive data
 
-EXTERN dev9Struct dev9;
+extern dev9Struct dev9;
 
 #define dev9_rxfifo_write(x) (dev9.rxfifo[dev9.rxfifo_wr_ptr++] = x)
 
@@ -154,11 +103,7 @@ EXTERN dev9Struct dev9;
 #define dev9Ru16(mem) (*(u16*)&dev9.dev9R[(mem)&0xffff])
 #define dev9Ru32(mem) (*(u32*)&dev9.dev9R[(mem)&0xffff])
 
-EXTERN int ThreadRun;
-
-//Yes these are meant to be a lowercase extern
-extern std::string s_strIniPath;
-extern std::string s_strLogPath;
+extern int ThreadRun;
 
 #define DEV9_R_REV 0x1f80146e
 
@@ -213,7 +158,7 @@ extern std::string s_strLogPath;
 
 #define SPD_R_XFR_CTRL			(SPD_REGBASE + 0x32)
 #define		SPD_XFR_WRITE		(1 << 0)
-#define		SPD_XFR_DMAEN		(1 << 1)
+#define		SPD_XFR_DMAEN		(1 << 7)
 #define SPD_R_DBUF_STAT			(SPD_REGBASE + 0x38)
 //Read
 #define		SPD_DBUF_AVAIL_MAX	0x10
@@ -223,7 +168,8 @@ extern std::string s_strLogPath;
 #define		SPD_DBUF_STAT_FULL	(1 << 7)
 //HDD->SPEED: both SPD_DBUF_STAT_2 and SPD_DBUF_STAT_FULL set to 1 indicates overflow
 //Write
-#define		SPD_DBUF_RESET_FIFO	(1 << 1) //Set SPD_DBUF_STAT_1 & SPD_DBUF_STAT_2, SPD_DBUF_AVAIL set to 0
+#define		SPD_DBUF_RESET_READ_CNT		(1 << 0)
+#define		SPD_DBUF_RESET_WRITE_CNT	(1 << 1)
 
 #define SPD_R_IF_CTRL			(SPD_REGBASE + 0x64)
 #define		SPD_IF_UDMA			(1 << 0)
@@ -283,7 +229,7 @@ extern std::string s_strLogPath;
 #define	SMAP_R_RXFIFO_FRAME_CNT		(SMAP_REGBASE + 0xf3C)
 #define	SMAP_R_RXFIFO_FRAME_DEC		(SMAP_REGBASE + 0xf40)
 #define	SMAP_R_RXFIFO_DATA		(SMAP_REGBASE + 0x1100)
- 
+
 #define	SMAP_R_FIFO_ADDR		(SMAP_REGBASE + 0x1200)
 #define	  SMAP_FIFO_CMD_READ	(1<<1)
 #define	  SMAP_FIFO_DATA_SWAP	(1<<0)
@@ -722,7 +668,6 @@ static flash_info_t devices[] = {
 #define FLASH_REGSIZE 0x20
 
 extern void dev9Irq(int cycles);
-extern void DEV9configure();
 
 void FLASHinit();
 s32 DEV9init();
@@ -734,6 +679,7 @@ void FLASHwrite32(u32 addr, u32 value, int size);
 void _DEV9irq(int cause, int cycles);
 int DEV9irqHandler(void);
 void DEV9async(u32 cycles);
+void DEV9runFIFO();
 void DEV9writeDMA8Mem(u32* pMem, int size);
 void DEV9readDMA8Mem(u32* pMem, int size);
 u8 DEV9read8(u32 addr);
@@ -742,9 +688,8 @@ u32 DEV9read32(u32 addr);
 void DEV9write8(u32 addr, u8 value);
 void DEV9write16(u32 addr, u16 value);
 void DEV9write32(u32 addr, u32 value);
-void ApplyConfigIfRunning(ConfigDEV9 oldConfig);
+void DEV9CheckChanges(const Pcsx2Config& old_config);
 
 #ifdef _WIN32
 #pragma warning(error : 4013)
-#endif
 #endif

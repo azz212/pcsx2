@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
+
 //#version 420 // Keep it for editor detection
 
 
@@ -15,31 +18,27 @@ layout(location = 7) in vec4 COLOR;
 // smooth, the default, means to do perspective-correct interpolation.
 //
 // The centroid qualifier only matters when multisampling. If this qualifier is not present, then the value is interpolated to the pixel's center, anywhere in the pixel, or to one of the pixel's samples. This sample may lie outside of the actual primitive being rendered, since a primitive can cover only part of a pixel's area. The centroid qualifier is used to prevent this; the interpolation point must fall within both the pixel's area and the primitive's area.
-out SHADER
-{
-    vec4 p;
-    vec2 t;
-    vec4 c;
-} VSout;
+out vec4 PSin_p;
+out vec2 PSin_t;
+out vec4 PSin_c;
 
 void vs_main()
 {
-    VSout.p = vec4(POSITION, 0.5f, 1.0f);
-    VSout.t = TEXCOORD0;
-    VSout.c = COLOR;
-    gl_Position = vec4(POSITION, 0.5f, 1.0f); // NOTE I don't know if it is possible to merge POSITION_OUT and gl_Position
+	PSin_p = vec4(POSITION, 0.5f, 1.0f);
+	PSin_t = TEXCOORD0;
+	PSin_c = COLOR;
+	gl_Position = vec4(POSITION, 0.5f, 1.0f); // NOTE I don't know if it is possible to merge POSITION_OUT and gl_Position
 }
 
 #endif
 
 #ifdef FRAGMENT_SHADER
 
-in SHADER
-{
-    vec4 p;
-    vec2 t;
-    vec4 c;
-} PSin;
+in vec4 PSin_p;
+in vec2 PSin_t;
+in vec4 PSin_c;
+
+layout(binding = 0) uniform sampler2D TextureSampler;
 
 // Give a different name so I remember there is a special case!
 #if defined(ps_convert_rgba8_16bits) || defined(ps_convert_float32_32bits)
@@ -50,313 +49,246 @@ layout(location = 0) out vec4 SV_Target0;
 
 vec4 sample_c()
 {
-    return texture(TextureSampler, PSin.t);
-}
-
-vec4 ps_crt(uint i)
-{
-    vec4 mask[4] = vec4[4]
-        (
-         vec4(1, 0, 0, 0),
-         vec4(0, 1, 0, 0),
-         vec4(0, 0, 1, 0),
-         vec4(1, 1, 1, 0)
-        );
-    return sample_c() * clamp((mask[i] + 0.5f), 0.0f, 1.0f);
+	return texture(TextureSampler, PSin_t);
 }
 
 #ifdef ps_copy
 void ps_copy()
 {
-    SV_Target0 = sample_c();
+	SV_Target0 = sample_c();
+}
+#endif
+
+#ifdef ps_depth_copy
+void ps_depth_copy()
+{
+  gl_FragDepth = sample_c().r;
+}
+#endif
+
+#ifdef ps_downsample_copy
+uniform ivec2 ClampMin;
+uniform int DownsampleFactor;
+uniform float Weight;
+
+void ps_downsample_copy()
+{
+	ivec2 coord = max(ivec2(gl_FragCoord.xy) * DownsampleFactor, ClampMin);
+	vec4 result = vec4(0);
+	for (int yoff = 0; yoff < DownsampleFactor; yoff++)
+	{
+		for (int xoff = 0; xoff < DownsampleFactor; xoff++)
+			result += texelFetch(TextureSampler, coord + ivec2(xoff, yoff), 0);
+	}
+	SV_Target0 = result / Weight;
 }
 #endif
 
 #ifdef ps_convert_rgba8_16bits
+// Need to be careful with precision here, it can break games like Spider-Man 3 and Dogs Life
 void ps_convert_rgba8_16bits()
 {
-    // Input Color is RGBA8
+	highp uvec4 i = uvec4(sample_c() * vec4(255.5f, 255.5f, 255.5f, 255.5f));
 
-    // We want to output a pixel on the PSMCT16* format
-    // A1-BGR5
-
-#if 0
-    // Note: dot is a good idea from pseudo. However we must be careful about float accuraccy.
-    // Here a global idea example:
-    //
-    // SV_Target1 = dot(round(sample_c() * vec4(31.f, 31.f, 31.f, 1.f)), vec4(1.f, 32.f, 1024.f, 32768.f));
-    //
-
-    // For me this code is more accurate but it will require some tests
-
-    vec4 c = sample_c() * 255.0f + 0.5f; // Denormalize value to avoid float precision issue
-
-    // shift Red: -3
-    // shift Green: -3 + 5
-    // shift Blue: -3 + 10
-    // shift Alpha: -7 + 15
-    highp uvec4 i = uvec4(c * vec4(1/8.0f, 4.0f, 128.0f, 256.0f)); // Shift value
-
-    // bit field operation requires GL4 HW. Could be nice to merge it with step/mix below
-    SV_Target1 = (i.r & uint(0x001f)) | (i.g & uint(0x03e0)) | (i.b & uint(0x7c00)) | (i.a & uint(0x8000));
-
-#else
-    // Old code which is likely wrong.
-
-    vec4 c = sample_c();
-
-    c.a *= 256.0f / 127.0f; // hm, 0.5 won't give us 1.0 if we just multiply with 2
-
-    highp uvec4 i = uvec4(c * vec4(uint(0x001f), uint(0x03e0), uint(0x7c00), uint(0x8000)));
-
-    // bit field operation requires GL4 HW.
-    SV_Target1 = (i.x & uint(0x001f)) | (i.y & uint(0x03e0)) | (i.z & uint(0x7c00)) | (i.w & uint(0x8000));
-#endif
-
-
+	SV_Target1 = ((i.x & 0x00F8u) >> 3) | ((i.y & 0x00F8u) << 2) | ((i.z & 0x00f8u) << 7) | ((i.w & 0x80u) << 8);
 }
 #endif
 
 #ifdef ps_convert_float32_32bits
 void ps_convert_float32_32bits()
 {
-    // Convert a GL_FLOAT32 depth texture into a 32 bits UINT texture
-    SV_Target1 = uint(exp2(32.0f) * sample_c().r);
+	// Convert a GL_FLOAT32 depth texture into a 32 bits UINT texture
+	SV_Target1 = uint(exp2(32.0f) * sample_c().r);
 }
 #endif
 
 #ifdef ps_convert_float32_rgba8
 void ps_convert_float32_rgba8()
 {
-    // Convert a GL_FLOAT32 depth texture into a RGBA color texture
-    const vec4 bitSh = vec4(exp2(24.0f), exp2(16.0f), exp2(8.0f), exp2(0.0f));
-    const vec4 bitMsk = vec4(0.0, 1.0/256.0, 1.0/256.0, 1.0/256.0);
-
-    vec4 res = fract(vec4(sample_c().r) * bitSh);
-
-    SV_Target0 = (res - res.xxyz * bitMsk) * 256.0f/255.0f;
+	// Convert a GL_FLOAT32 depth texture into a RGBA color texture
+	uint d = uint(sample_c().r * exp2(32.0f));
+	SV_Target0 = vec4(uvec4((d & 0xFFu), ((d >> 8) & 0xFFu), ((d >> 16) & 0xFFu), (d >> 24))) / vec4(255.0);
 }
 #endif
 
 #ifdef ps_convert_float16_rgb5a1
 void ps_convert_float16_rgb5a1()
 {
-    // Convert a GL_FLOAT32 (only 16 lsb) depth into a RGB5A1 color texture
-    const vec4 bitSh = vec4(exp2(32.0f), exp2(27.0f), exp2(22.0f), exp2(17.0f));
-    const uvec4 bitMsk = uvec4(0x1F, 0x1F, 0x1F, 0x1);
-    uvec4 color = uvec4(vec4(sample_c().r) * bitSh) & bitMsk;
+	// Convert a GL_FLOAT32 (only 16 lsb) depth into a RGB5A1 color texture
+	uint d = uint(sample_c().r * exp2(32.0f));
+	SV_Target0 = vec4(uvec4(d << 3, d >> 2, d >> 7, d >> 8) & uvec4(0xf8, 0xf8, 0xf8, 0x80)) / 255.0f;
+}
+#endif
 
-    SV_Target0 = vec4(color) / vec4(32.0f, 32.0f, 32.0f, 1.0f);
+float rgba8_to_depth32(vec4 unorm)
+{
+	uvec4 c = uvec4(unorm * vec4(255.5f));
+	return float(c.r | (c.g << 8) | (c.b << 16) | (c.a << 24)) * exp2(-32.0f);
+}
+
+float rgba8_to_depth24(vec4 unorm)
+{
+	uvec3 c = uvec3(unorm.rgb * vec3(255.5f));
+	return float(c.r | (c.g << 8) | (c.b << 16)) * exp2(-32.0f);
+}
+
+float rgba8_to_depth16(vec4 unorm)
+{
+	uvec2 c = uvec2(unorm.rg * vec2(255.5f));
+	return float(c.r | (c.g << 8)) * exp2(-32.0f);
+}
+
+float rgb5a1_to_depth16(vec4 unorm)
+{
+	uvec4 c = uvec4(unorm * vec4(255.5f));
+	return float(((c.r & 0xF8u) >> 3) | ((c.g & 0xF8u) << 2) | ((c.b & 0xF8u) << 7) | ((c.a & 0x80u) << 8)) * exp2(-32.0f);
+}
+
+#ifdef ps_convert_float32_float24
+void ps_convert_float32_float24()
+{
+	// Truncates depth value to 24bits
+	uint d = uint(sample_c().r * exp2(32.0f)) & 0xFFFFFFu;
+	gl_FragDepth = float(d) * exp2(-32.0f);
 }
 #endif
 
 #ifdef ps_convert_rgba8_float32
 void ps_convert_rgba8_float32()
 {
-    // Convert a RRGBA texture into a float depth texture
-    // FIXME: I'm afraid of the accuracy
-    const vec4 bitSh = vec4(exp2(-32.0f), exp2(-24.0f), exp2(-16.0f), exp2(-8.0f)) * vec4(255.0);
-    gl_FragDepth = dot(sample_c(), bitSh);
+	// Convert an RGBA texture into a float depth texture
+	gl_FragDepth = rgba8_to_depth32(sample_c());
 }
 #endif
 
 #ifdef ps_convert_rgba8_float24
 void ps_convert_rgba8_float24()
 {
-    // Same as above but without the alpha channel (24 bits Z)
+	// Same as above but without the alpha channel (24 bits Z)
 
-    // Convert a RRGBA texture into a float depth texture
-    // FIXME: I'm afraid of the accuracy
-    const vec3 bitSh = vec3(exp2(-32.0f), exp2(-24.0f), exp2(-16.0f)) * vec3(255.0);
-    gl_FragDepth = dot(sample_c().rgb, bitSh);
+	// Convert an RGBA texture into a float depth texture
+	gl_FragDepth = rgba8_to_depth24(sample_c());
 }
 #endif
 
 #ifdef ps_convert_rgba8_float16
 void ps_convert_rgba8_float16()
 {
-    // Same as above but without the A/B channels (16 bits Z)
+	// Same as above but without the A/B channels (16 bits Z)
 
-    // Convert a RRGBA texture into a float depth texture
-    // FIXME: I'm afraid of the accuracy
-    const vec2 bitSh = vec2(exp2(-32.0f), exp2(-24.0f)) * vec2(255.0);
-    gl_FragDepth = dot(sample_c().rg, bitSh);
+	// Convert an RGBA texture into a float depth texture
+	gl_FragDepth = rgba8_to_depth16(sample_c());
 }
 #endif
 
 #ifdef ps_convert_rgb5a1_float16
 void ps_convert_rgb5a1_float16()
 {
-    // Convert a RGB5A1 (saved as RGBA8) color to a 16 bit Z
-    // FIXME: I'm afraid of the accuracy
-    const vec4 bitSh = vec4(exp2(-32.0f), exp2(-27.0f), exp2(-22.0f), exp2(-17.0f));
-    // Trunc color to drop useless lsb
-    vec4 color = trunc(sample_c() * vec4(255.0f) / vec4(8.0f, 8.0f, 8.0f, 128.0f));
-    gl_FragDepth = dot(vec4(color), bitSh);
+	// Convert an RGB5A1 (saved as RGBA8) color to a 16 bit Z
+	gl_FragDepth = rgb5a1_to_depth16(sample_c());
+}
+#endif
+
+#define SAMPLE_RGBA_DEPTH_BILN(CONVERT_FN) \
+	ivec2 dims = textureSize(TextureSampler, 0); \
+	vec2 top_left_f = PSin_t * vec2(dims) - 0.5f; \
+	ivec2 top_left = ivec2(floor(top_left_f)); \
+	ivec4 coords = clamp(ivec4(top_left, top_left + 1), ivec4(0), dims.xyxy - 1); \
+	vec2 mix_vals = fract(top_left_f); \
+	float depthTL = CONVERT_FN(texelFetch(TextureSampler, coords.xy, 0)); \
+	float depthTR = CONVERT_FN(texelFetch(TextureSampler, coords.zy, 0)); \
+	float depthBL = CONVERT_FN(texelFetch(TextureSampler, coords.xw, 0)); \
+	float depthBR = CONVERT_FN(texelFetch(TextureSampler, coords.zw, 0)); \
+	gl_FragDepth = mix(mix(depthTL, depthTR, mix_vals.x), mix(depthBL, depthBR, mix_vals.x), mix_vals.y);
+
+#ifdef ps_convert_rgba8_float32_biln
+void ps_convert_rgba8_float32_biln()
+{
+	// Convert an RGBA texture into a float depth texture
+	SAMPLE_RGBA_DEPTH_BILN(rgba8_to_depth32);
+}
+#endif
+
+#ifdef ps_convert_rgba8_float24_biln
+void ps_convert_rgba8_float24_biln()
+{
+	// Same as above but without the alpha channel (24 bits Z)
+
+	// Convert an RGBA texture into a float depth texture
+	SAMPLE_RGBA_DEPTH_BILN(rgba8_to_depth24);
+}
+#endif
+
+#ifdef ps_convert_rgba8_float16_biln
+void ps_convert_rgba8_float16_biln()
+{
+	// Same as above but without the A/B channels (16 bits Z)
+
+	// Convert an RGBA texture into a float depth texture
+	SAMPLE_RGBA_DEPTH_BILN(rgba8_to_depth16);
+}
+#endif
+
+#ifdef ps_convert_rgb5a1_float16_biln
+void ps_convert_rgb5a1_float16_biln()
+{
+	// Convert an RGB5A1 (saved as RGBA8) color to a 16 bit Z
+	SAMPLE_RGBA_DEPTH_BILN(rgb5a1_to_depth16);
 }
 #endif
 
 #ifdef ps_convert_rgba_8i
+uniform uint SBW;
+uniform uint DBW;
+uniform float ScaleFactor;
+
 void ps_convert_rgba_8i()
 {
+	// Convert a RGBA texture into a 8 bits packed texture
+	// Input column: 8x2 RGBA pixels
+	// 0: 8 RGBA
+	// 1: 8 RGBA
+	// Output column: 16x4 Index pixels
+	// 0: 8 R | 8 B
+	// 1: 8 R | 8 B
+	// 2: 8 G | 8 A
+	// 3: 8 G | 8 A
+	uvec2 pos = uvec2(gl_FragCoord.xy);
 
-    // Potential speed optimization. There is a high probability that
-    // game only want to extract a single channel (blue). It will allow
-    // to remove most of the conditional operation and yield a +2/3 fps
-    // boost on MGS3
-    //
-    // Hypothesis wrong in Prince of Persia ... Seriously WTF !
-    //#define ONLY_BLUE;
+	// Collapse separate R G B A areas into their base pixel
+	uvec2 block = (pos & ~uvec2(15u, 3u)) >> 1;
+	uvec2 subblock = pos & uvec2(7u, 1u);
+	uvec2 coord = block | subblock;
 
-    // Convert a RGBA texture into a 8 bits packed texture
-    // Input column: 8x2 RGBA pixels
-    // 0: 8 RGBA
-    // 1: 8 RGBA
-    // Output column: 16x4 Index pixels
-    // 0: 8 R | 8 B
-    // 1: 8 R | 8 B
-    // 2: 8 G | 8 A
-    // 3: 8 G | 8 A
-    float c;
+	// Compensate for potentially differing page pitch.
+	uvec2 block_xy = coord / uvec2(64u, 32u);
+	uint block_num = (block_xy.y * (DBW / 128u)) + block_xy.x;
+	uvec2 block_offset = uvec2((block_num % (SBW / 64u)) * 64u, (block_num / (SBW / 64u)) * 32u);
+	coord = (coord % uvec2(64u, 32u)) + block_offset;
 
-    uvec2 sel = uvec2(gl_FragCoord.xy) % uvec2(16u, 16u);
-    ivec2 tb  = ((ivec2(gl_FragCoord.xy) & ~ivec2(15, 3)) >> 1);
+	// Apply offset to cols 1 and 2
+	uint is_col23 = pos.y & 4u;
+	uint is_col13 = pos.y & 2u;
+	uint is_col12 = is_col23 ^ (is_col13 << 1);
+	coord.x ^= is_col12; // If cols 1 or 2, flip bit 3 of x
 
-    int ty   = tb.y | (int(gl_FragCoord.y) & 1);
-    int txN  = tb.x | (int(gl_FragCoord.x) & 7);
-    int txH  = tb.x | ((int(gl_FragCoord.x) + 4) & 7);
+	if (floor(ScaleFactor) != ScaleFactor)
+		coord = uvec2(vec2(coord) * ScaleFactor);
+	else
+		coord *= uvec2(ScaleFactor);
 
-    txN *= PS_SCALE_FACTOR;
-    txH *= PS_SCALE_FACTOR;
-    ty  *= PS_SCALE_FACTOR;
-
-    // TODO investigate texture gather
-    vec4 cN = texelFetch(TextureSampler, ivec2(txN, ty), 0);
-    vec4 cH = texelFetch(TextureSampler, ivec2(txH, ty), 0);
-
-
-    if ((sel.y & 4u) == 0u) {
-        // Column 0 and 2
-#ifdef ONLY_BLUE
-        c = cN.b;
-#else
-        if ((sel.y & 3u) < 2u) {
-            // first 2 lines of the col
-            if (sel.x < 8u)
-                c = cN.r;
-            else
-                c = cN.b;
-        } else {
-            if (sel.x < 8u)
-                c = cH.g;
-            else
-                c = cH.a;
-        }
-#endif
-    } else {
-#ifdef ONLY_BLUE
-        c = cH.b;
-#else
-        // Column 1 and 3
-        if ((sel.y & 3u) < 2u) {
-            // first 2 lines of the col
-            if (sel.x < 8u)
-                c = cH.r;
-            else
-                c = cH.b;
-        } else {
-            if (sel.x < 8u)
-                c = cN.g;
-            else
-                c = cN.a;
-        }
-#endif
-    }
-
-
-    SV_Target0 = vec4(c);
-}
-#endif
-
-#ifdef ps_osd
-void ps_osd()
-{
-    SV_Target0 = PSin.c * vec4(1.0, 1.0, 1.0, sample_c().r);
+	vec4 pixel = texelFetch(TextureSampler, ivec2(coord), 0);
+	vec2  sel0 = (pos.y & 2u) == 0u ? pixel.rb : pixel.ga;
+	float sel1 = (pos.x & 8u) == 0u ? sel0.x : sel0.y;
+	SV_Target0 = vec4(sel1);
 }
 #endif
 
 #ifdef ps_filter_transparency
 void ps_filter_transparency()
 {
-    vec4 c = sample_c();
-
-    c.a = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-
-    SV_Target0 = c;
-}
-#endif
-
-#ifdef ps_filter_scanlines
-vec4 ps_scanlines(uint i)
-{
-    vec4 mask[2] =
-    {
-        vec4(1, 1, 1, 0),
-        vec4(0, 0, 0, 0)
-    };
-
-    return sample_c() * clamp((mask[i] + 0.5f), 0.0f, 1.0f);
-}
-
-void ps_filter_scanlines() // scanlines
-{
-    highp uvec4 p = uvec4(gl_FragCoord);
-
-    vec4 c = ps_scanlines(p.y % 2u);
-
-    SV_Target0 = c;
-}
-#endif
-
-#ifdef ps_filter_diagonal
-void ps_filter_diagonal() // diagonal
-{
-    highp uvec4 p = uvec4(gl_FragCoord);
-
-    vec4 c = ps_crt((p.x + (p.y % 3u)) % 3u);
-
-    SV_Target0 = c;
-}
-#endif
-
-#ifdef ps_filter_triangular
-void ps_filter_triangular() // triangular
-{
-    highp uvec4 p = uvec4(gl_FragCoord);
-
-    vec4 c = ps_crt(((p.x + ((p.y >> 1u) & 1u) * 3u) >> 1u) % 3u);
-
-    SV_Target0 = c;
-}
-#endif
-
-#ifdef ps_filter_complex
-void ps_filter_complex()
-{
-
-    const float PI = 3.14159265359f;
-
-    vec2 texdim = vec2(textureSize(TextureSampler, 0));
-
-    vec4 c;
-    if (dFdy(PSin.t.y) * PSin.t.y > 0.5f) {
-        c = sample_c();
-    } else {
-        float factor = (0.9f - 0.4f * cos(2.0f * PI * PSin.t.y * texdim.y));
-        c =  factor * texture(TextureSampler, vec2(PSin.t.x, (floor(PSin.t.y * texdim.y) + 0.5f) / texdim.y));
-    }
-
-    SV_Target0 = c;
+	vec4 c = sample_c();
+	SV_Target0 = vec4(c.rgb, 1.0);
 }
 #endif
 
@@ -365,8 +297,8 @@ void ps_filter_complex()
 #ifdef ps_datm1
 void ps_datm1()
 {
-    if(sample_c().a < (127.5f / 255.0f)) // >= 0x80 pass
-        discard;
+	if(sample_c().a < (127.5f / 255.0f)) // >= 0x80 pass
+		discard;
 }
 #endif
 
@@ -375,66 +307,175 @@ void ps_datm1()
 #ifdef ps_datm0
 void ps_datm0()
 {
-    if((127.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
-        discard;
+	if((127.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
+		discard;
 }
 #endif
 
-#ifdef ps_mod256
-void ps_mod256()
+// Used for DATE (stencil)
+// DATM == 1
+#ifdef ps_datm1_rta_correction
+void ps_datm1_rta_correction()
 {
-    SV_Target0 = mod(round(sample_c() * 255.0f), 256.0f) / 255.0f;
+	if(sample_c().a < (254.5f / 255.0f)) // >= 0x80 pass
+		discard;
+}
+#endif
+
+// Used for DATE (stencil)
+// DATM == 0
+#ifdef ps_datm0_rta_correction
+void ps_datm0_rta_correction()
+{
+	if((254.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
+		discard;
+}
+#endif
+
+#ifdef ps_rta_correction
+void ps_rta_correction()
+{
+	vec4 value = sample_c();
+	SV_Target0 = vec4(value.rgb, value.a / (128.25f / 255.0f));
+}
+#endif
+
+#ifdef ps_rta_decorrection
+void ps_rta_decorrection()
+{
+	vec4 value = sample_c();
+	SV_Target0 = vec4(value.rgb, value.a * (128.25f / 255.0f));
+}
+#endif
+
+#ifdef ps_hdr_init
+void ps_hdr_init()
+{
+	vec4 value = sample_c();
+	SV_Target0 = vec4(round(value.rgb * 255.0f) / 65535.0f, value.a);
+}
+#endif
+
+#ifdef ps_hdr_resolve
+void ps_hdr_resolve()
+{
+	vec4 value = sample_c();
+	SV_Target0 = vec4(vec3(uvec3(value.rgb * 65535.0f) & 255u) / 255.0f, value.a);
+}
+#endif
+
+#ifdef ps_convert_clut_4
+uniform uvec3 offset;
+uniform float scale;
+
+void ps_convert_clut_4()
+{
+	// CLUT4 is easy, just two rows of 8x8.
+	uint index = uint(gl_FragCoord.x) + offset.z;
+	uvec2 pos = uvec2(index % 8u, index / 8u);
+
+	ivec2 final = ivec2(floor(vec2(offset.xy + pos) * vec2(scale)));
+	SV_Target0 = texelFetch(TextureSampler, final, 0);
+}
+#endif
+
+#ifdef ps_convert_clut_8
+uniform uvec3 offset;
+uniform float scale;
+
+void ps_convert_clut_8()
+{
+	uint index = min(uint(gl_FragCoord.x) + offset.z, 255u);
+
+	// CLUT is arranged into 8 groups of 16x2, with the top-right and bottom-left quadrants swapped.
+	// This can probably be done better..
+	uint subgroup = (index / 8u) % 4u;
+	uvec2 pos;
+	pos.x = (index % 8u) + ((subgroup >= 2u) ? 8u : 0u);
+	pos.y = ((index / 32u) * 2u) + (subgroup % 2u);
+
+	ivec2 final = ivec2(floor(vec2(offset.xy + pos) * vec2(scale)));
+	SV_Target0 = texelFetch(TextureSampler, final, 0);
 }
 #endif
 
 #ifdef ps_yuv
+uniform ivec2 EMOD;
+
 void ps_yuv()
 {
-    vec4 i = sample_c();
-    vec4 o;
+	vec4 i = sample_c();
+	vec4 o = vec4(0.0f);
 
-    mat3 rgb2yuv; // Value from GS manual
-    rgb2yuv[0] = vec3(0.587, -0.311, -0.419);
-    rgb2yuv[1] = vec3(0.114, 0.500, -0.081);
-    rgb2yuv[2] = vec3(0.299, -0.169, 0.500);
+	mat3 rgb2yuv; // Value from GS manual
+	rgb2yuv[0] = vec3(0.587, -0.311, -0.419);
+	rgb2yuv[1] = vec3(0.114, 0.500, -0.081);
+	rgb2yuv[2] = vec3(0.299, -0.169, 0.500);
 
-    vec3 yuv = rgb2yuv * i.gbr;
+	vec3 yuv = rgb2yuv * i.gbr;
 
-    float Y = float(0xDB)/255.0f * yuv.x + float(0x10)/255.0f;
-    float Cr = float(0xE0)/255.0f * yuv.y + float(0x80)/255.0f;
-    float Cb = float(0xE0)/255.0f * yuv.z + float(0x80)/255.0f;
+	float Y = float(0xDB)/255.0f * yuv.x + float(0x10)/255.0f;
+	float Cr = float(0xE0)/255.0f * yuv.y + float(0x80)/255.0f;
+	float Cb = float(0xE0)/255.0f * yuv.z + float(0x80)/255.0f;
 
-    switch(EMODA) {
-        case 0:
-            o.a = i.a;
-            break;
-        case 1:
-            o.a = Y;
-            break;
-        case 2:
-            o.a = Y/2.0f;
-            break;
-        case 3:
-            o.a = 0.0f;
-            break;
-    }
+	switch(EMOD.x)
+	{
+		case 0:
+			o.a = i.a;
+			break;
+		case 1:
+			o.a = Y;
+			break;
+		case 2:
+			o.a = Y/2.0f;
+			break;
+		case 3:
+			o.a = 0.0f;
+			break;
+	}
 
-    switch(EMODC) {
-        case 0:
-            o.rgb = i.rgb;
-            break;
-        case 1:
-            o.rgb = vec3(Y);
-            break;
-        case 2:
-            o.rgb = vec3(Y, Cb, Cr);
-            break;
-        case 3:
-            o.rgb = vec3(i.a);
-            break;
-    }
+	switch(EMOD.y)
+	{
+		case 0:
+			o.rgb = i.rgb;
+			break;
+		case 1:
+			o.rgb = vec3(Y);
+			break;
+		case 2:
+			o.rgb = vec3(Y, Cb, Cr);
+			break;
+		case 3:
+			o.rgb = vec3(i.a);
+			break;
+	}
 
-    SV_Target0 = o;
+	SV_Target0 = o;
+}
+#endif
+
+#if defined(ps_stencil_image_init_0) || defined(ps_stencil_image_init_1) || defined(ps_stencil_image_init_2) || defined(ps_stencil_image_init_3)
+
+void main()
+{
+	SV_Target0 = vec4(0x7FFFFFFF);
+
+	#ifdef ps_stencil_image_init_0
+		if((127.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
+			SV_Target0 = vec4(-1);
+	#endif
+	#ifdef ps_stencil_image_init_1
+		if(sample_c().a < (127.5f / 255.0f)) // >= 0x80 pass
+			SV_Target0 = vec4(-1);
+	#endif
+	#ifdef ps_stencil_image_init_2
+		if((254.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
+			SV_Target0 = vec4(-1);
+	#endif
+	#ifdef ps_stencil_image_init_3
+		if(sample_c().a < (254.5f / 255.0f)) // >= 0x80 pass
+			SV_Target0 = vec4(-1);
+	#endif
 }
 #endif
 

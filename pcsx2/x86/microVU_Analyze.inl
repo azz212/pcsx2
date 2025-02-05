@@ -1,17 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- * 
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
@@ -584,8 +572,29 @@ static void analyzeBranchVI(mV, int xReg, bool& infoVar)
 // Branch in Branch Delay-Slots
 __ri int mVUbranchCheck(mV)
 {
-	if (!mVUcount)
+	if (!mVUcount && !isEvilBlock)
 		return 0;
+
+	// This means we have jumped from an evil branch situation, so this is another branch in delay slot
+	if (isEvilBlock)
+	{
+		mVUlow.evilBranch = true;
+		mVUregs.blockType = 2;
+		mVUregs.needExactMatch |= 7; // This might not be necessary, but w/e...
+		mVUregs.flagInfo = 0;
+
+		if (mVUlow.branch == 2 || mVUlow.branch == 10)
+		{
+			Console.Error("microVU%d: %s in branch, branch delay slot requires link [%04x] - If game broken report to PCSX2 Team", mVU.index,
+				branchSTR[mVUlow.branch & 0xf], xPC);
+		}
+		else
+		{
+			DevCon.Warning("microVU%d: %s in branch, branch delay slot! [%04x] - If game broken report to PCSX2 Team", mVU.index,
+				branchSTR[mVUlow.branch & 0xf], xPC);
+		}
+		return 1;
+	}
 
 	incPC(-2);
 
@@ -598,19 +607,7 @@ __ri int mVUbranchCheck(mV)
 			incPC(2);
 			mVUlow.evilBranch = true;
 
-			if (mVUlow.branch == 2 || mVUlow.branch == 10) // Needs linking, we can only guess this if the next is not conditional
-			{
-				// First branch is not conditional so we know what the link will be
-				// So we can let the existing evil block do its thing! We know where to get the addr :)
-				if (branchType <= 2 || branchType >= 9)
-				{
-					mVUregs.blockType = 2;
-				} // Else it is conditional, so we need to do some nasty processing later in microVU_Branch.inl
-			}
-			else
-			{
-				mVUregs.blockType = 2; // Second branch doesn't need linking, so can let it run its evil block course (MGS2 for testing)
-			}
+			mVUregs.blockType = 2; // Second branch doesn't need linking, so can let it run its evil block course (MGS2 for testing)
 
 			mVUregs.needExactMatch |= 7; // This might not be necessary, but w/e...
 			mVUregs.flagInfo = 0;
@@ -657,7 +654,8 @@ __fi void mVUanalyzeNormBranch(mV, int It, bool isBAL)
 	if (isBAL)
 	{
 		analyzeVIreg2(mVU, It, mVUlow.VI_write, 1);
-		setConstReg(It, bSaveAddr);
+		if(!mVUlow.evilBranch)
+			setConstReg(It, bSaveAddr);
 	}
 }
 
@@ -674,6 +672,7 @@ __ri void mVUanalyzeJump(mV, int Is, int It, bool isJALR)
 	if (isJALR)
 	{
 		analyzeVIreg2(mVU, It, mVUlow.VI_write, 1);
-		setConstReg(It, bSaveAddr);
+		if (!mVUlow.evilBranch)
+			setConstReg(It, bSaveAddr);
 	}
 }

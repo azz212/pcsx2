@@ -1,21 +1,11 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 
 #include "IopMem.h"
+
+#include "common/StringUtil.h"
 
 static const u32
 	HW_PS1_GPU_START = 0x1F8010A0,
@@ -208,7 +198,7 @@ struct dma_mbc
 	{
 		return (bcr >> 16);
 	}
-	wxString desc() const { return wxsFormat(L"madr: 0x%x bcr: 0x%x chcr: 0x%x", madr, bcr, chcr); }
+	std::string desc() const { return StringUtil::StdStringFromFormat("madr: 0x%x bcr: 0x%x chcr: 0x%x", madr, bcr, chcr); }
 };
 
 struct dma_mbct
@@ -226,7 +216,7 @@ struct dma_mbct
 	{
 		return (bcr >> 16);
 	}
-	wxString desc() const { return wxsFormat(L"madr: 0x%x bcr: 0x%x chcr: 0x%x tadr: 0x%x", madr, bcr, chcr, tadr); }
+	std::string desc() const { return StringUtil::StdStringFromFormat("madr: 0x%x bcr: 0x%x chcr: 0x%x tadr: 0x%x", madr, bcr, chcr, tadr); }
 };
 
 static dma_mbc&		hw_dma0		= (dma_mbc&) iopHw[0x1080];
@@ -324,11 +314,10 @@ enum IopEventId
 };
 
 extern void PSX_INT( IopEventId n, s32 ecycle);
+extern int psxRemainingCycles(IopEventId n);
 
 extern void psxSetNextBranch( u32 startCycle, s32 delta );
 extern void psxSetNextBranchDelta( s32 delta );
-extern int iopTestCycle( u32 startCycle, s32 delta );
-extern void _iopTestInterrupts();
 
 extern void psxHwReset();
 extern u8   psxHw4Read8 (u32 add);

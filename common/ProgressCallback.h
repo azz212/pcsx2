@@ -1,20 +1,10 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 #include "Pcsx2Defs.h"
+
+#include <memory>
 #include <string>
 
 /**
@@ -25,6 +15,14 @@
 class ProgressCallback
 {
 public:
+	enum class ProgressState
+	{
+		Normal,
+		Indeterminate,
+		Paused,
+		Error
+	};
+
 	virtual ~ProgressCallback();
 
 	virtual void PushState() = 0;
@@ -40,6 +38,7 @@ public:
 	virtual void SetProgressRange(u32 range) = 0;
 	virtual void SetProgressValue(u32 value) = 0;
 	virtual void IncrementProgressValue() = 0;
+	virtual void SetProgressState(ProgressState state) = 0;
 
 	void SetFormattedStatusText(const char* Format, ...);
 
@@ -62,6 +61,8 @@ public:
 
 public:
 	static ProgressCallback* NullProgressCallback;
+
+	static std::unique_ptr<ProgressCallback> CreateNullProgressCallback();
 };
 
 class BaseProgressCallback : public ProgressCallback
@@ -81,6 +82,7 @@ public:
 	virtual void SetProgressRange(u32 range) override;
 	virtual void SetProgressValue(u32 value) override;
 	virtual void IncrementProgressValue() override;
+	virtual void SetProgressState(ProgressState state) override;
 
 protected:
 	struct State
@@ -93,13 +95,14 @@ protected:
 		bool cancellable;
 	};
 
-	bool m_cancellable;
-	bool m_cancelled;
+	bool m_cancellable = false;
+	bool m_cancelled = false;
 	std::string m_status_text;
-	u32 m_progress_range;
-	u32 m_progress_value;
+	u32 m_progress_range = 1;
+	u32 m_progress_value = 0;
+	ProgressState m_progress_state = ProgressState::Normal;
 
-	u32 m_base_progress_value;
+	u32 m_base_progress_value = 0;
 
-	State* m_saved_state;
+	State* m_saved_state = nullptr;
 };

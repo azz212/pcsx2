@@ -1,25 +1,12 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2014  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#include "PrecompiledHeader.h"
 #include "Breakpoints.h"
-#include "SymbolMap.h"
+#include "SymbolGuardian.h"
 #include "MIPSAnalyst.h"
 #include <cstdio>
 #include "R5900.h"
-#include "System.h"
+#include "R3000A.h"
 
 std::vector<BreakPoint> CBreakPoints::breakPoints_;
 u32 CBreakPoints::breakSkipFirstAtEE_ = 0;
@@ -27,19 +14,13 @@ u64 CBreakPoints::breakSkipFirstTicksEE_ = 0;
 u32 CBreakPoints::breakSkipFirstAtIop_ = 0;
 u64 CBreakPoints::breakSkipFirstTicksIop_ = 0;
 std::vector<MemCheck> CBreakPoints::memChecks_;
-std::vector<MemCheck *> CBreakPoints::cleanupMemChecks_;
+std::vector<MemCheck*> CBreakPoints::cleanupMemChecks_;
 bool CBreakPoints::breakpointTriggered_ = false;
+BreakPointCpu CBreakPoints::breakpointTriggeredCpu_;
+bool CBreakPoints::corePaused = false;
 
 // called from the dynarec
-u32 __fastcall standardizeBreakpointAddress(BreakPointCpu cpu, u32 addr)
-{
-	if (cpu == BREAKPOINT_IOP)
-		return standardizeBreakpointAddressIop(addr);
-	else
-		return standardizeBreakpointAddressEE(addr);
-}
-
-u32 __fastcall standardizeBreakpointAddressEE(u32 addr)
+u32 standardizeBreakpointAddress(u32 addr)
 {
 	if (addr >= 0xFFFF8000)
 		return addr;
@@ -54,22 +35,18 @@ u32 __fastcall standardizeBreakpointAddressEE(u32 addr)
 	return addr;
 }
 
-u32 __fastcall standardizeBreakpointAddressIop(u32 addr)
-{
-	return addr;
-}
-
 MemCheck::MemCheck()
 	: start(0)
 	, end(0)
-	, cond(MEMCHECK_READWRITE)
+	, hasCond(false)
+	, memCond(MEMCHECK_READWRITE)
 	, result(MEMCHECK_BOTH)
 	, cpu(BREAKPOINT_EE)
+	, numHits(0)
 	, lastPC(0)
 	, lastAddr(0)
 	, lastSize(0)
 {
-	numHits = 0;
 }
 
 void MemCheck::Log(u32 addr, bool write, int size, u32 pc)
@@ -79,15 +56,15 @@ void MemCheck::Log(u32 addr, bool write, int size, u32 pc)
 void MemCheck::Action(u32 addr, bool write, int size, u32 pc)
 {
 	int mask = write ? MEMCHECK_WRITE : MEMCHECK_READ;
-	if (cond & mask)
+	if (memCond & mask)
 	{
 		++numHits;
 
 		Log(addr, write, size, pc);
 		if (result & MEMCHECK_BREAK)
 		{
-		//	Core_EnableStepping(true);
-		//	host->SetDebugMode(true);
+			//	Core_EnableStepping(true);
+			//	host->SetDebugMode(true);
 		}
 	}
 }
@@ -95,7 +72,7 @@ void MemCheck::Action(u32 addr, bool write, int size, u32 pc)
 void MemCheck::JitBefore(u32 addr, bool write, int size, u32 pc)
 {
 	int mask = MEMCHECK_WRITE | MEMCHECK_WRITE_ONCHANGE;
-	if (write && (cond & mask) == mask)
+	if (write && (memCond & mask) == mask)
 	{
 		lastAddr = addr;
 		lastPC = pc;
@@ -137,11 +114,12 @@ void MemCheck::JitCleanup()
 
 size_t CBreakPoints::FindBreakpoint(BreakPointCpu cpu, u32 addr, bool matchTemp, bool temp)
 {
-	addr = standardizeBreakpointAddress(cpu, addr);
+	if (cpu == BREAKPOINT_EE)
+		addr = standardizeBreakpointAddress(addr);
 
 	for (size_t i = 0; i < breakPoints_.size(); ++i)
 	{
-		u32 cmp = standardizeBreakpointAddress(cpu, breakPoints_[i].addr);
+		u32 cmp = cpu == BREAKPOINT_EE ? standardizeBreakpointAddress(breakPoints_[i].addr) : breakPoints_[i].addr;
 		if (cpu == breakPoints_[i].cpu && cmp == addr && (!matchTemp || breakPoints_[i].temporary == temp))
 			return i;
 	}
@@ -151,13 +129,16 @@ size_t CBreakPoints::FindBreakpoint(BreakPointCpu cpu, u32 addr, bool matchTemp,
 
 size_t CBreakPoints::FindMemCheck(BreakPointCpu cpu, u32 start, u32 end)
 {
-	start = standardizeBreakpointAddress(cpu, start);
-	end = standardizeBreakpointAddress(cpu, end);
+	if (cpu == BREAKPOINT_EE)
+	{
+		start = standardizeBreakpointAddress(start);
+		end = standardizeBreakpointAddress(end);
+	}
 
 	for (size_t i = 0; i < memChecks_.size(); ++i)
 	{
-		u32 cmpStart = standardizeBreakpointAddress(cpu, memChecks_[i].start);
-		u32 cmpEnd = standardizeBreakpointAddress(cpu, memChecks_[i].end);
+		u32 cmpStart = cpu == BREAKPOINT_EE ? standardizeBreakpointAddress(memChecks_[i].start) : memChecks_[i].start;
+		u32 cmpEnd = cpu == BREAKPOINT_EE ? standardizeBreakpointAddress(memChecks_[i].end) : memChecks_[i].end;
 		if (memChecks_[i].cpu == cpu && cmpStart == start && cmpEnd == end)
 			return i;
 	}
@@ -177,25 +158,27 @@ bool CBreakPoints::IsAddressBreakPoint(BreakPointCpu cpu, u32 addr)
 
 bool CBreakPoints::IsAddressBreakPoint(BreakPointCpu cpu, u32 addr, bool* enabled)
 {
-	size_t bp = FindBreakpoint(cpu, addr);
-	if (bp == INVALID_BREAKPOINT) return false;
-	if (enabled != NULL) *enabled = breakPoints_[bp].enabled;
+	const size_t bp = FindBreakpoint(cpu, addr);
+	if (bp == INVALID_BREAKPOINT)
+		return false;
+	if (enabled != NULL)
+		*enabled = breakPoints_[bp].enabled;
 	return true;
 }
 
 bool CBreakPoints::IsTempBreakPoint(BreakPointCpu cpu, u32 addr)
 {
-	size_t bp = FindBreakpoint(cpu, addr, true, true);
+	const size_t bp = FindBreakpoint(cpu, addr, true, true);
 	return bp != INVALID_BREAKPOINT;
 }
 
-void CBreakPoints::AddBreakPoint(BreakPointCpu cpu, u32 addr, bool temp)
+void CBreakPoints::AddBreakPoint(BreakPointCpu cpu, u32 addr, bool temp, bool enabled)
 {
-	size_t bp = FindBreakpoint(cpu, addr, true, temp);
+	const size_t bp = FindBreakpoint(cpu, addr, true, temp);
 	if (bp == INVALID_BREAKPOINT)
 	{
 		BreakPoint pt;
-		pt.enabled = true;
+		pt.enabled = enabled;
 		pt.temporary = temp;
 		pt.addr = addr;
 		pt.cpu = cpu;
@@ -229,7 +212,7 @@ void CBreakPoints::RemoveBreakPoint(BreakPointCpu cpu, u32 addr)
 
 void CBreakPoints::ChangeBreakPoint(BreakPointCpu cpu, u32 addr, bool status)
 {
-	size_t bp = FindBreakpoint(cpu, addr);
+	const size_t bp = FindBreakpoint(cpu, addr);
 	if (bp != INVALID_BREAKPOINT)
 	{
 		breakPoints_[bp].enabled = status;
@@ -251,7 +234,7 @@ void CBreakPoints::ClearTemporaryBreakPoints()
 	if (breakPoints_.empty())
 		return;
 
-	for (int i = (int)breakPoints_.size()-1; i >= 0; --i)
+	for (int i = (int)breakPoints_.size() - 1; i >= 0; --i)
 	{
 		if (breakPoints_[i].temporary)
 		{
@@ -261,9 +244,9 @@ void CBreakPoints::ClearTemporaryBreakPoints()
 	}
 }
 
-void CBreakPoints::ChangeBreakPointAddCond(BreakPointCpu cpu, u32 addr, const BreakPointCond &cond)
+void CBreakPoints::ChangeBreakPointAddCond(BreakPointCpu cpu, u32 addr, const BreakPointCond& cond)
 {
-	size_t bp = FindBreakpoint(cpu, addr, true, false);
+	const size_t bp = FindBreakpoint(cpu, addr, true, false);
 	if (bp != INVALID_BREAKPOINT)
 	{
 		breakPoints_[bp].hasCond = true;
@@ -274,7 +257,7 @@ void CBreakPoints::ChangeBreakPointAddCond(BreakPointCpu cpu, u32 addr, const Br
 
 void CBreakPoints::ChangeBreakPointRemoveCond(BreakPointCpu cpu, u32 addr)
 {
-	size_t bp = FindBreakpoint(cpu, addr, true, false);
+	const size_t bp = FindBreakpoint(cpu, addr, true, false);
 	if (bp != INVALID_BREAKPOINT)
 	{
 		breakPoints_[bp].hasCond = false;
@@ -282,7 +265,7 @@ void CBreakPoints::ChangeBreakPointRemoveCond(BreakPointCpu cpu, u32 addr)
 	}
 }
 
-BreakPointCond *CBreakPoints::GetBreakPointCondition(BreakPointCpu cpu, u32 addr)
+BreakPointCond* CBreakPoints::GetBreakPointCondition(BreakPointCpu cpu, u32 addr)
 {
 	size_t bp = FindBreakpoint(cpu, addr, true, true);
 	//temp breakpoints are unconditional
@@ -300,13 +283,13 @@ void CBreakPoints::AddMemCheck(BreakPointCpu cpu, u32 start, u32 end, MemCheckCo
 	// This will ruin any pending memchecks.
 	cleanupMemChecks_.clear();
 
-	size_t mc = FindMemCheck(cpu, start, end);
+	const size_t mc = FindMemCheck(cpu, start, end);
 	if (mc == INVALID_MEMCHECK)
 	{
 		MemCheck check;
 		check.start = start;
 		check.end = end;
-		check.cond = cond;
+		check.memCond = cond;
 		check.result = result;
 		check.cpu = cpu;
 
@@ -315,7 +298,7 @@ void CBreakPoints::AddMemCheck(BreakPointCpu cpu, u32 start, u32 end, MemCheckCo
 	}
 	else
 	{
-		memChecks_[mc].cond = (MemCheckCondition)(memChecks_[mc].cond | cond);
+		memChecks_[mc].memCond = (MemCheckCondition)(memChecks_[mc].memCond | cond);
 		memChecks_[mc].result = (MemCheckResult)(memChecks_[mc].result | result);
 		Update(cpu);
 	}
@@ -326,7 +309,7 @@ void CBreakPoints::RemoveMemCheck(BreakPointCpu cpu, u32 start, u32 end)
 	// This will ruin any pending memchecks.
 	cleanupMemChecks_.clear();
 
-	size_t mc = FindMemCheck(cpu, start, end);
+	const size_t mc = FindMemCheck(cpu, start, end);
 	if (mc != INVALID_MEMCHECK)
 	{
 		memChecks_.erase(memChecks_.begin() + mc);
@@ -336,11 +319,32 @@ void CBreakPoints::RemoveMemCheck(BreakPointCpu cpu, u32 start, u32 end)
 
 void CBreakPoints::ChangeMemCheck(BreakPointCpu cpu, u32 start, u32 end, MemCheckCondition cond, MemCheckResult result)
 {
-	size_t mc = FindMemCheck(cpu, start, end);
+	const size_t mc = FindMemCheck(cpu, start, end);
 	if (mc != INVALID_MEMCHECK)
 	{
-		memChecks_[mc].cond = cond;
+		memChecks_[mc].memCond = cond;
 		memChecks_[mc].result = result;
+		Update(cpu);
+	}
+}
+
+void CBreakPoints::ChangeMemCheckRemoveCond(BreakPointCpu cpu, u32 start, u32 end)
+{
+	const size_t mc = FindMemCheck(cpu, start, end);
+	if (mc != INVALID_MEMCHECK)
+	{
+		memChecks_[mc].hasCond = false;
+		Update(cpu);
+	}
+}
+
+void CBreakPoints::ChangeMemCheckAddCond(BreakPointCpu cpu, u32 start, u32 end, const BreakPointCond& cond)
+{
+	const size_t mc = FindMemCheck(cpu, start, end);
+	if (mc != INVALID_MEMCHECK)
+	{
+		memChecks_[mc].hasCond = true;
+		memChecks_[mc].cond = cond;
 		Update(cpu);
 	}
 }
@@ -361,24 +365,31 @@ void CBreakPoints::SetSkipFirst(BreakPointCpu cpu, u32 pc)
 {
 	if (cpu == BREAKPOINT_EE)
 	{
-		breakSkipFirstAtEE_ = standardizeBreakpointAddress(cpu, pc);
+		breakSkipFirstAtEE_ = standardizeBreakpointAddress(pc);
 		breakSkipFirstTicksEE_ = r5900Debug.getCycles();
 	}
 	else if (cpu == BREAKPOINT_IOP)
 	{
-		breakSkipFirstAtIop_ = standardizeBreakpointAddress(cpu, pc);
+		breakSkipFirstAtIop_ = pc;
 		breakSkipFirstTicksIop_ = r3000Debug.getCycles();
 	}
 }
 
 u32 CBreakPoints::CheckSkipFirst(BreakPointCpu cpu, u32 cmpPc)
 {
-	cmpPc = standardizeBreakpointAddress(cpu, cmpPc);
 	if (cpu == BREAKPOINT_EE && breakSkipFirstTicksEE_ == r5900Debug.getCycles())
 		return breakSkipFirstAtEE_;
 	else if (cpu == BREAKPOINT_IOP && breakSkipFirstTicksIop_ == r3000Debug.getCycles())
 		return breakSkipFirstAtIop_;
 	return 0;
+}
+
+void CBreakPoints::ClearSkipFirst()
+{
+	breakSkipFirstAtEE_ = 0;
+	breakSkipFirstTicksEE_ = 0;
+	breakSkipFirstAtIop_ = 0;
+	breakSkipFirstTicksIop_ = 0;
 }
 
 const std::vector<MemCheck> CBreakPoints::GetMemCheckRanges()
@@ -397,37 +408,57 @@ const std::vector<MemCheck> CBreakPoints::GetMemCheckRanges()
 	return ranges;
 }
 
-const std::vector<MemCheck> CBreakPoints::GetMemChecks()
+const std::vector<MemCheck> CBreakPoints::GetMemChecks(BreakPointCpu cpu)
 {
-	return memChecks_;
+	std::vector<MemCheck> memChecks;
+	std::copy_if(memChecks_.begin(), memChecks_.end(), std::back_inserter(memChecks), [cpu](MemCheck& mc) { return mc.cpu == cpu; });
+	return memChecks;
 }
 
-const std::vector<BreakPoint> CBreakPoints::GetBreakpoints()
+const std::vector<BreakPoint> CBreakPoints::GetBreakpoints(BreakPointCpu cpu, bool includeTemp)
 {
-	return breakPoints_;
-}
+	std::vector<BreakPoint> breakPoints;
 
-// including them earlier causes some ambiguities
-#include "gui/App.h"
-#include "gui/Debugger/DisassemblyDialog.h"
+	std::copy_if(breakPoints_.begin(), breakPoints_.end(), std::back_inserter(breakPoints), [cpu, includeTemp](BreakPoint& bp) {
+		if (bp.cpu == cpu)
+		{
+			if (includeTemp)
+				return true;
+			else
+				return bp.temporary == false;
+		}
+		else
+		{
+			return false;
+		}
+	});
+
+	if (includeTemp)
+		return breakPoints_;
+
+	return breakPoints;
+}
 
 void CBreakPoints::Update(BreakPointCpu cpu, u32 addr)
 {
 	bool resume = false;
 	if (!r5900Debug.isCpuPaused())
 	{
+		corePaused = true; // This will be set to false in whatever handles the VM pause event
 		r5900Debug.pauseCpu();
 		resume = true;
 	}
 
-//	if (addr != 0)
-//		Cpu->Clear(addr-4,8);
-//	else
-		SysClearExecutionCache();
+	if (cpu & BREAKPOINT_EE)
+	{
+		Cpu->Reset();
+	}
+
+	if (cpu & BREAKPOINT_IOP)
+	{
+		psxCpu->Reset();
+	}
 
 	if (resume)
 		r5900Debug.resumeCpu();
-	auto disassembly_window = wxGetApp().GetDisassemblyPtr();
-	if (disassembly_window) // make sure that valid pointer is recieved to prevent potential NULL dereference.
-		disassembly_window->update();
 }

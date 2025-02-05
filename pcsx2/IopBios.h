@@ -1,20 +1,7 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#ifndef __PSXBIOS_H__
-#define __PSXBIOS_H__
+#pragma once
 
 #define IOP_ENOENT 2
 #define IOP_EIO 5
@@ -64,7 +51,7 @@ public:
 
 	virtual void close() = 0;
 
-	virtual int read(void* buf) { return -IOP_EIO; } /* Flawfinder: ignore */
+	virtual int read(void* buf, bool iomanX = false) { return -IOP_EIO; } /* Flawfinder: ignore */
 };
 
 typedef int (*irxHLE)(); // return 1 if handled, otherwise 0
@@ -72,20 +59,23 @@ typedef void (*irxDEBUG)();
 
 namespace R3000A
 {
+	u32 irxFindLoadcore(u32 entrypc);
 	u32 irxImportTableAddr(u32 entrypc);
 	const char* irxImportFuncname(const std::string& libname, u16 index);
 	irxHLE irxImportHLE(const std::string& libnam, u16 index);
 	irxDEBUG irxImportDebug(const std::string& libname, u16 index);
 	void irxImportLog(const std::string& libnameptr, u16 index, const char* funcname);
-	void __fastcall irxImportLog_rec(u32 import_table, u16 index, const char* funcname);
+	void irxImportLog_rec(u32 import_table, u16 index, const char* funcname);
 	int irxImportExec(u32 import_table, u16 index);
 
 	namespace ioman
 	{
 		void reset();
+		bool is_host(const std::string_view path);
+		std::string host_path(const std::string_view path, bool allow_open_host_root);
 	}
 } // namespace R3000A
 
-extern void Hle_SetElfPath(const char* elfFileName);
+extern void Hle_SetHostRoot(const char* bootFilename);
+extern void Hle_ClearHostRoot();
 
-#endif /* __PSXBIOS_H__ */

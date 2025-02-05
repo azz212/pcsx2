@@ -1,24 +1,11 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
 #pragma once
 #include <cstdint>
 
 namespace Common
 {
-
 	class Timer
 	{
 	public:
@@ -47,48 +34,11 @@ namespace Common
 		double GetTimeMillisecondsAndReset();
 		double GetTimeNanosecondsAndReset();
 
+		bool ResetIfSecondsPassed(double s);
+		bool ResetIfMillisecondsPassed(double s);
+		bool ResetIfNanosecondsPassed(double s);
+
 	private:
 		Value m_tvStartValue;
 	};
-
-	class ThreadCPUTimer
-	{
-	public:
-		using Value = std::uint64_t;
-
-		ThreadCPUTimer();
-		ThreadCPUTimer(ThreadCPUTimer&& move);
-		ThreadCPUTimer(const ThreadCPUTimer&) = delete;
-		~ThreadCPUTimer();
-
-		void Reset();
-		void ResetTo(Value value) { m_start_value = value; }
-
-		Value GetStartValue() const { return m_start_value; }
-		Value GetCurrentValue() const;
-
-		double GetTimeSeconds() const;
-		double GetTimeMilliseconds() const;
-		double GetTimeNanoseconds() const;
-
-		void GetUsageInSecondsAndReset(Value time_diff, double* usage_time, double* usage_percent);
-		void GetUsageInMillisecondsAndReset(Value time_diff, double* usage_time, double* usage_percent);
-		void GetUsageInNanosecondsAndReset(Value time_diff, double* usage_time, double* usage_percent);
-
-		static double GetUtilizationPercentage(Timer::Value time_diff, Value cpu_time_diff);
-
-		static double ConvertValueToSeconds(Value value);
-		static double ConvertValueToMilliseconds(Value value);
-		static double ConvertValueToNanoseconds(Value value);
-
-		static ThreadCPUTimer GetForCallingThread();
-
-		ThreadCPUTimer& operator=(const ThreadCPUTimer&) = delete;
-		ThreadCPUTimer& operator=(ThreadCPUTimer&& move);
-
-	private:
-		void* m_thread_handle = nullptr;
-		Value m_start_value = 0;
-	};
-
 } // namespace Common

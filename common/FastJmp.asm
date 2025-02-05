@@ -1,62 +1,6 @@
-; PCSX2 - PS2 Emulator for PCs
-; Copyright (C) 2002-2021  PCSX2 Dev Team
-;
-; PCSX2 is free software: you can redistribute it and/or modify it under the terms
-; of the GNU Lesser General Public License as published by the Free Software Found-
-; ation, either version 3 of the License, or (at your option) any later version.
-;
-; PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-; PURPOSE.  See the GNU General Public License for more details.
-;
-; You should have received a copy of the GNU General Public License along with PCSX2.
-; If not, see <http://www.gnu.org/licenses/>.
+; SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+; SPDX-License-Identifier: GPL-3.0+
 
-IFDEF _M_X86_32
-
-; -----------------------------------------
-; 32-bit X86
-; -----------------------------------------
-  .386
-  .model flat
-
-_TEXT         SEGMENT
-
-PUBLIC @fastjmp_set@4
-PUBLIC @fastjmp_jmp@8
-
-; void fastjmp_set(fastjmp_buf*)
-@fastjmp_set@4   PROC
-  mov eax, dword ptr [esp]
-  mov edx, esp                              ; fixup stack pointer, so it doesn't include the call to fastjmp_set
-  add edx, 4
-  mov dword ptr [ecx], eax                  ; actually eip
-  mov dword ptr [ecx + 4], ebx
-  mov dword ptr [ecx + 8], edx              ; actually esp
-  mov dword ptr [ecx + 12], ebp
-  mov dword ptr [ecx + 16], esi
-  mov dword ptr [ecx + 20], edi
-  xor eax, eax
-  ret
-@fastjmp_set@4   ENDP
-
-; void __fastcall fastjmp_jmp(fastjmp_buf*, int)
-@fastjmp_jmp@8   PROC
-  mov eax, edx                              ; return code
-  mov edx, dword ptr [ecx + 0]
-  mov ebx, dword ptr [ecx + 4]
-  mov esp, dword ptr [ecx + 8]
-  mov ebp, dword ptr [ecx + 12]
-  mov esi, dword ptr [ecx + 16]
-  mov edi, dword ptr [ecx + 20]
-  jmp edx
-@fastjmp_jmp@8   ENDP
-
-_TEXT         ENDS
-
-ENDIF      ; _M_X86_32
-
-IFDEF _M_X86_64
 ; -----------------------------------------
 ; 64-bit X86
 ; -----------------------------------------
@@ -123,7 +67,5 @@ fastjmp_jmp   PROC
 fastjmp_jmp   ENDP
 
 _TEXT         ENDS
-
-ENDIF     ; _M_X86_64
 
 END

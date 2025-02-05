@@ -1,4 +1,13 @@
-#ifdef SHADER_MODEL // make safe to include in resource file to enforce dependency
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
+
+Texture2D Texture;
+SamplerState Sampler;
+
+cbuffer cb0
+{
+	float4 params;
+};
 
 /*
 ** Contrast, saturation, brightness
@@ -9,9 +18,9 @@
 // For all settings: 1.0 = 100% 0.5=50% 1.5 = 150% 
 float4 ContrastSaturationBrightness(float4 color) // Ported to HLSL
 {
-	const float sat = SB_SATURATION / 50.0;
-	const float brt = SB_BRIGHTNESS / 50.0;
-	const float con = SB_CONTRAST / 50.0;
+	float brt = params.x;
+	float con = params.y;
+	float sat = params.z;
 	
 	// Increase or decrease these values to adjust r, g and b color channels separately
 	const float AvgLumR = 0.5;
@@ -30,14 +39,6 @@ float4 ContrastSaturationBrightness(float4 color) // Ported to HLSL
 	return color;
 }
 
-Texture2D Texture;
-SamplerState Sampler;
-
-cbuffer cb0
-{
-	float4 BGColor;
-};
-
 struct PS_INPUT
 {
 	float4 p : SV_Position;
@@ -49,5 +50,3 @@ float4 ps_main(PS_INPUT input) : SV_Target0
 	float4 c = Texture.Sample(Sampler, input.t);
 	return ContrastSaturationBrightness(c);
 }
-
-#endif

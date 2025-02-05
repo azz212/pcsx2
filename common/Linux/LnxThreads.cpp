@@ -1,45 +1,38 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2010  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2025 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-3.0+
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include "common/Threading.h"
+#include "common/Assertions.h"
+
+#include <memory>
+
+#include <pthread.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/prctl.h>
-#elif defined(__unix__)
+#include <sys/types.h>
+#include <sched.h>
+
+// glibc < v2.30 doesn't define gettid...
+#if __GLIBC__ == 2 && __GLIBC_MINOR__ < 30
+#include <sys/syscall.h>
+#define gettid() syscall(SYS_gettid)
+#endif
+#else
 #include <pthread_np.h>
 #endif
-
-#include "common/PersistentThread.h"
-
-// We wont need this until we actually have this more then just stubbed out, so I'm commenting this out
-// to remove an unneeded dependency.
-//#include "x86emitter/tools.h"
-
-#if !defined(__unix__)
-
-#pragma message("LnxThreads.cpp should only be compiled by projects or makefiles targeted at Linux/BSD distros.")
-
-#else
 
 // Note: assuming multicore is safer because it forces the interlocked routines to use
 // the LOCK prefix.  The prefix works on single core CPUs fine (but is slow), but not
 // having the LOCK prefix is very bad indeed.
 
-__forceinline void Threading::Sleep(int ms)
+__forceinline void Threading::Timeslice()
 {
-	usleep(1000 * ms);
+	sched_yield();
 }
 
 // For use in spin/wait loops,  Acts as a hint to Intel CPUs and should, in theory
@@ -48,7 +41,11 @@ __forceinline void Threading::SpinWait()
 {
 	// If this doesn't compile you can just comment it out (it only serves as a
 	// performance hint and isn't required).
+#if defined(_M_X86)
 	__asm__("pause");
+#elif defined(_M_ARM64)
+	__asm__ __volatile__("isb");
+#endif
 }
 
 __forceinline void Threading::EnableHiresScheduler()
@@ -96,29 +93,247 @@ u64 Threading::GetThreadCpuTime()
 	return get_thread_time();
 }
 
-u64 Threading::pxThread::GetCpuTime() const
+Threading::ThreadHandle::ThreadHandle() = default;
+
+Threading::ThreadHandle::ThreadHandle(const ThreadHandle& handle)
+	: m_native_handle(handle.m_native_handle)
+#ifdef __linux__
+	, m_native_id(handle.m_native_id)
+#endif
 {
-	// Get the cpu time for the thread belonging to this object.  Use m_native_id and/or
-	// m_native_handle to implement it. Return value should be a measure of total time the
-	// thread has used on the CPU (scaled by the value returned by GetThreadTicksPerSecond(),
-	// which typically would be an OS-provided scalar or some sort).
-
-	if (!m_native_id)
-		return 0;
-
-	return get_thread_time(m_native_id);
 }
 
-void Threading::pxThread::_platform_specific_OnStartInThread()
+Threading::ThreadHandle::ThreadHandle(ThreadHandle&& handle)
+	: m_native_handle(handle.m_native_handle)
+#ifdef __linux__
+	, m_native_id(handle.m_native_id)
+#endif
 {
-	// Obtain linux-specific thread IDs or Handles here, which can be used to query
-	// kernel scheduler performance information.
-	m_native_id = (uptr)pthread_self();
+	handle.m_native_handle = nullptr;
+#ifdef __linux__
+	handle.m_native_id = 0;
+#endif
 }
 
-void Threading::pxThread::_platform_specific_OnCleanupInThread()
+Threading::ThreadHandle::~ThreadHandle() = default;
+
+Threading::ThreadHandle Threading::ThreadHandle::GetForCallingThread()
 {
-	// Cleanup handles here, which were opened above.
+	ThreadHandle ret;
+	ret.m_native_handle = (void*)pthread_self();
+#ifdef __linux__
+	ret.m_native_id = gettid();
+#endif
+	return ret;
+}
+
+Threading::ThreadHandle& Threading::ThreadHandle::operator=(ThreadHandle&& handle)
+{
+	m_native_handle = handle.m_native_handle;
+	handle.m_native_handle = nullptr;
+#ifdef __linux__
+	m_native_id = handle.m_native_id;
+	handle.m_native_id = 0;
+#endif
+	return *this;
+}
+
+Threading::ThreadHandle& Threading::ThreadHandle::operator=(const ThreadHandle& handle)
+{
+	m_native_handle = handle.m_native_handle;
+#ifdef __linux__
+	m_native_id = handle.m_native_id;
+#endif
+	return *this;
+}
+
+u64 Threading::ThreadHandle::GetCPUTime() const
+{
+	return m_native_handle ? get_thread_time((uptr)m_native_handle) : 0;
+}
+
+bool Threading::ThreadHandle::SetAffinity(u64 processor_mask) const
+{
+#if defined(__linux__)
+	cpu_set_t set;
+	CPU_ZERO(&set);
+
+	if (processor_mask != 0)
+	{
+		for (u32 i = 0; i < 64; i++)
+		{
+			if (processor_mask & (static_cast<u64>(1) << i))
+			{
+				CPU_SET(i, &set);
+			}
+		}
+	}
+	else
+	{
+		long num_processors = sysconf(_SC_NPROCESSORS_CONF);
+		for (long i = 0; i < num_processors; i++)
+		{
+			CPU_SET(i, &set);
+		}
+	}
+
+	return sched_setaffinity((pid_t)m_native_id, sizeof(set), &set) >= 0;
+#else
+	return false;
+#endif
+}
+
+Threading::Thread::Thread() = default;
+
+Threading::Thread::Thread(Thread&& thread)
+	: ThreadHandle(thread)
+	, m_stack_size(thread.m_stack_size)
+{
+	thread.m_stack_size = 0;
+}
+
+Threading::Thread::Thread(EntryPoint func)
+	: ThreadHandle()
+{
+	if (!Start(std::move(func)))
+		pxFailRel("Failed to start implicitly started thread.");
+}
+
+Threading::Thread::~Thread()
+{
+	pxAssertRel(!m_native_handle, "Thread should be detached or joined at destruction");
+}
+
+void Threading::Thread::SetStackSize(u32 size)
+{
+	pxAssertRel(!m_native_handle, "Can't change the stack size on a started thread");
+	m_stack_size = size;
+}
+
+#ifdef __linux__
+// For Linux, we have to do a bit of trickery here to get the thread's ID back from
+// the thread itself, because it's not part of pthreads. We use a semaphore to signal
+// when the thread has started, and filled in thread_id_ptr.
+struct ThreadProcParameters
+{
+	Threading::Thread::EntryPoint func;
+	Threading::KernelSemaphore* start_semaphore;
+	unsigned int* thread_id_ptr;
+};
+
+void* Threading::Thread::ThreadProc(void* param)
+{
+	std::unique_ptr<ThreadProcParameters> entry(static_cast<ThreadProcParameters*>(param));
+	*entry->thread_id_ptr = gettid();
+	entry->start_semaphore->Post();
+	entry->func();
+	return nullptr;
+}
+
+bool Threading::Thread::Start(EntryPoint func)
+{
+	pxAssertRel(!m_native_handle, "Can't start an already-started thread");
+
+	KernelSemaphore start_semaphore;
+	std::unique_ptr<ThreadProcParameters> params(std::make_unique<ThreadProcParameters>());
+	params->func = std::move(func);
+	params->start_semaphore = &start_semaphore;
+	params->thread_id_ptr = &m_native_id;
+
+	pthread_attr_t attrs;
+	bool has_attributes = false;
+
+	if (m_stack_size != 0)
+	{
+		has_attributes = true;
+		pthread_attr_init(&attrs);
+	}
+	if (m_stack_size != 0)
+		pthread_attr_setstacksize(&attrs, m_stack_size);
+
+	pthread_t handle;
+	const int res = pthread_create(&handle, has_attributes ? &attrs : nullptr, ThreadProc, params.get());
+	if (res != 0)
+		return false;
+
+	// wait until it sets our native id
+	start_semaphore.Wait();
+
+	// thread started, it'll release the memory
+	m_native_handle = (void*)handle;
+	params.release();
+	return true;
+}
+
+#else
+
+void* Threading::Thread::ThreadProc(void* param)
+{
+	std::unique_ptr<EntryPoint> entry(static_cast<EntryPoint*>(param));
+	(*entry.get())();
+	return nullptr;
+}
+
+bool Threading::Thread::Start(EntryPoint func)
+{
+	pxAssertRel(!m_native_handle, "Can't start an already-started thread");
+
+	std::unique_ptr<EntryPoint> func_clone(std::make_unique<EntryPoint>(std::move(func)));
+
+	pthread_attr_t attrs;
+	bool has_attributes = false;
+
+	if (m_stack_size != 0)
+	{
+		has_attributes = true;
+		pthread_attr_init(&attrs);
+	}
+	if (m_stack_size != 0)
+		pthread_attr_setstacksize(&attrs, m_stack_size);
+
+	pthread_t handle;
+	const int res = pthread_create(&handle, has_attributes ? &attrs : nullptr, ThreadProc, func_clone.get());
+	if (res != 0)
+		return false;
+
+	// thread started, it'll release the memory
+	m_native_handle = (void*)handle;
+	func_clone.release();
+	return true;
+}
+
+#endif
+
+void Threading::Thread::Detach()
+{
+	pxAssertRel(m_native_handle, "Can't detach without a thread");
+	pthread_detach((pthread_t)m_native_handle);
+	m_native_handle = nullptr;
+#ifdef __linux__
+	m_native_id = 0;
+#endif
+}
+
+void Threading::Thread::Join()
+{
+	pxAssertRel(m_native_handle, "Can't join without a thread");
+	void* retval;
+	const int res = pthread_join((pthread_t)m_native_handle, &retval);
+	if (res != 0)
+		pxFailRel("pthread_join() for thread join failed");
+
+	m_native_handle = nullptr;
+#ifdef __linux__
+	m_native_id = 0;
+#endif
+}
+
+Threading::ThreadHandle& Threading::Thread::operator=(Thread&& thread)
+{
+	ThreadHandle::operator=(thread);
+	m_stack_size = thread.m_stack_size;
+	thread.m_stack_size = 0;
+	return *this;
 }
 
 void Threading::SetNameOfCurrentThread(const char* name)
@@ -131,6 +346,3 @@ void Threading::SetNameOfCurrentThread(const char* name)
 	pthread_set_name_np(pthread_self(), name);
 #endif
 }
-
-#endif
-#endif
